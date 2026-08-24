@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mycomp-bot-engine"
+version = "0.2.0"
+description = "Local, policy-controlled MCP engine for MyComp Bot"
+requires-python = ">=3.11"
+dependencies = ["mcp==1.28.1", "starlette==0.49.1", "uvicorn==0.34.0", "python-multipart==0.0.20"]
+
+[project.scripts]
+mycomp-bot-engine = "mycomp_bot_engine.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,38 @@
+{
+  "browser_cdp": {
+    "default_timeout_seconds": 60,
+    "description": "Local Chrome DevTools Protocol control for an owner-managed dedicated Chrome profile.",
+    "examples": [{"action": "launch"}, {"action": "click", "selector": "button[type=submit]"}],
+    "execution_modes": ["foreground", "background", "auto"],
+    "input_schema": {
+      "additionalProperties": true,
+      "properties": {"action": {"enum": ["launch", "status", "list_tabs", "new_tab", "close_tab", "navigate", "evaluate", "query", "click", "type", "wait", "screenshot"], "type": "string"}},
+      "required": ["action"],
+      "type": "object"
+    },
+    "output_schema": {"type": "object"},
+    "permissions": ["browser_control"],
+    "side_effects": "launch_browser,navigate_web,dom_input,screenshot_output",
+    "supports_dry_run": false,
+    "tags": ["windows", "browser", "dom"],
+    "version": "1.0.0"
+  },
+  "windows_ui": {
+    "default_timeout_seconds": 60,
+    "description": "Owner-supervised local Windows mouse, keyboard, scroll, drag, and window-listing bridge.",
+    "examples": [{"action": "click", "x": 400, "y": 300}],
+    "execution_modes": ["foreground", "background", "auto"],
+    "input_schema": {
+      "additionalProperties": true,
+      "properties": {"action": {"enum": ["status", "clear_stop", "observe", "observe_summary", "observe_changes", "list_windows", "mouse_move", "click", "double_click", "right_click", "drag", "scroll", "type_text", "paste_text", "press_key", "hotkey", "capture_display", "capture_region", "capture_window", "ocr", "activate_app", "inspect_elements", "find_element", "focus", "set_value", "close_window", "minimize_window"], "type": "string"}},
+      "required": ["action"],
+      "type": "object"
+    },
+    "output_schema": {"type": "object"},
+    "permissions": ["ui_control"],
+    "side_effects": "ui_control",
+    "supports_dry_run": false,
+    "tags": ["windows", "ui", "computer-use"],
+    "version": "1.0.0"
+  }
+}
