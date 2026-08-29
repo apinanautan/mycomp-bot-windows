@@ -138,18 +138,33 @@ if (-not $existing) {
     if ($LASTEXITCODE -ne 0) { throw 'Tailscale Funnel could not be enabled. Confirm Funnel is allowed for this tailnet.' }
 }
 
-$pythonw = Join-Path $venv 'Scripts\pythonw.exe'
 $app = Join-Path $PSScriptRoot 'MyCompBot.py'
-Start-Process -FilePath $pythonw -ArgumentList ('"{0}"' -f $app)
+$hostOutputLog = Join-Path $configDir 'host-output.log'
+$hostErrorLog = Join-Path $configDir 'host-error.log'
+$hostProcess = Start-Process -FilePath $venvPython `
+    -ArgumentList ('"{0}"' -f $app) `
+    -WindowStyle Hidden `
+    -RedirectStandardOutput $hostOutputLog `
+    -RedirectStandardError $hostErrorLog `
+    -PassThru
 $healthy = $false
 for ($i = 0; $i -lt 20; $i++) {
     Start-Sleep -Milliseconds 500
+    $hostProcess.Refresh()
+    if ($hostProcess.HasExited) { break }
     try {
         $response = Invoke-WebRequest -UseBasicParsing -Uri "$target/health" -TimeoutSec 2
         if ($response.StatusCode -eq 200) { $healthy = $true; break }
     } catch {}
 }
-if (-not $healthy) { throw 'MyComp Bot started but its local health check did not become ready.' }
+if (-not $healthy) {
+    $hostProcess.Refresh()
+    $hostError = if (Test-Path $hostErrorLog) { (Get-Content -LiteralPath $hostErrorLog -Raw).Trim() } else { '' }
+    $hostOutput = if (Test-Path $hostOutputLog) { (Get-Content -LiteralPath $hostOutputLog -Raw).Trim() } else { '' }
+    if ($hostError) { throw "MyComp Bot failed to start:`r`n`r`n$hostError" }
+    if ($hostOutput) { throw "MyComp Bot failed to start:`r`n`r`n$hostOutput" }
+    throw "MyComp Bot did not become ready. Process exited: $($hostProcess.HasExited). Logs: $hostErrorLog and $hostOutputLog"
+}
 
 Set-Clipboard -Value $endpoint
 Write-Host ''
