@@ -5,6 +5,19 @@ It has no hosted service and no preconfigured public endpoint: each person runs
 it on their own computer, chooses their own public HTTPS address, and enters
 the callback URI issued by their own ChatGPT connector.
 
+## Restore on another Windows computer
+
+If Tailscale is already installed and connected, download and run
+**`Install MyComp Bot.bat`**. When the repository is private, the installer
+opens GitHub's browser login, downloads or updates the source, installs Python
+3.11 when needed, creates the virtual environment, configures Tailscale Funnel
+on HTTPS port 443, and starts MyComp Bot.
+
+The installer derives the MCP URL from that computer's Tailscale MagicDNS name
+and copies it to the clipboard. A new computer still needs its ChatGPT callback
+URL pasted into the desktop app once. OAuth tokens and Tailscale account keys
+are deliberately never stored in this repository.
+
 ## One-click developer start
 
 Install Python 3.11 or later, clone the repository, then right-click
