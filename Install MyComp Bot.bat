@@ -21,6 +21,7 @@ exit /b 0
 
 :download_failed
 echo MyComp Bot could not be downloaded from GitHub. Check the internet connection and try again.
+start "" "https://github.com/apinanautan/mycomp-bot-windows/issues/new?title=MyComp%%20Bot%%20download%%20error"
 goto failed
 :installer_failed
 echo MyComp Bot setup did not finish. Read the error above, then run this file again.

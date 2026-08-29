@@ -15,6 +15,7 @@ import tkinter as tk
 import urllib.request
 import uuid
 import webbrowser
+import winreg
 import zlib
 from ctypes import wintypes
 from pathlib import Path
@@ -31,6 +32,36 @@ RUNTIME = APP_DATA / "runtime"
 COMMANDS, RESULTS = RUNTIME / "ui-commands", RUNTIME / "ui-results"
 LOCAL_HEALTH = "http://127.0.0.1:8645/health"
 UI_AUTOMATION_HELPER = Path(__file__).resolve().with_name("UIAutomationBridge.ps1")
+AUTOSTART_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+AUTOSTART_NAME = "MyComp Bot"
+ISSUE_URL = "https://github.com/apinanautan/mycomp-bot-windows/issues/new?title=MyComp%20Bot%20error"
+
+
+def _autostart_command() -> str:
+    return subprocess.list2cmdline([
+        str(ROOT / ".venv" / "Scripts" / "pythonw.exe"),
+        str(Path(__file__).resolve()),
+    ])
+
+
+def _autostart_enabled() -> bool:
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_KEY) as key:
+            value, _ = winreg.QueryValueEx(key, AUTOSTART_NAME)
+        return value == _autostart_command()
+    except OSError:
+        return False
+
+
+def _set_autostart(enabled: bool) -> None:
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, AUTOSTART_KEY) as key:
+        if enabled:
+            winreg.SetValueEx(key, AUTOSTART_NAME, 0, winreg.REG_SZ, _autostart_command())
+        else:
+            try:
+                winreg.DeleteValue(key, AUTOSTART_NAME)
+            except FileNotFoundError:
+                pass
 
 
 def _read_env() -> dict[str, str]:
@@ -364,6 +395,7 @@ class MyCompBot(tk.Tk):
         self.callback = tk.StringVar(value=values["MYCOMP_OAUTH_REDIRECT_URIS"])
         self.roots = tk.StringVar(value=values["MYCOMP_ALLOWED_ROOTS"])
         self.level = tk.StringVar(value=values["MYCOMP_PERMISSION_LEVEL"])
+        self.autostart = tk.BooleanVar(value=_autostart_enabled())
         self.status = tk.StringVar(value="Stopped")
         self.endpoint = tk.StringVar(value="Configure your own public HTTPS domain or start a temporary tunnel.")
         self._build()
@@ -400,7 +432,8 @@ class MyCompBot(tk.Tk):
         ttk.Button(frame, text="Stop Tunnel", command=self._stop_tunnel).grid(row=10, column=2, sticky="e", pady=(12, 0))
         ttk.Button(frame, text="Open ChatGPT Plugins & Copy MCP URL", command=self._open_chatgpt_plugins).grid(row=11, column=1, sticky="w", pady=(12, 0))
         ttk.Button(frame, text="Copy Owner Consent Code", command=self._copy_owner_consent_code).grid(row=11, column=2, sticky="e", pady=(12, 0))
-        ttk.Label(frame, text="Mouse/keyboard actions require Elevated. Accessibility uses Windows UI Automation; screen capture uses native Win32 capture. OCR is intentionally unavailable for now.", wraplength=640).grid(row=12, column=0, columnspan=3, sticky="w", pady=(20, 0))
+        ttk.Checkbutton(frame, text="Start MyComp Bot automatically when I sign in to Windows", variable=self.autostart, command=self._toggle_autostart).grid(row=12, column=0, columnspan=3, sticky="w", pady=(18, 0))
+        ttk.Label(frame, text="Mouse/keyboard actions require Elevated. Accessibility uses Windows UI Automation; screen capture uses native Win32 capture. OCR is intentionally unavailable for now.", wraplength=640).grid(row=13, column=0, columnspan=3, sticky="w", pady=(12, 0))
 
     def _values(self) -> dict[str, str]:
         return {**_defaults(), **_read_env(), "MYCOMP_OWNER_CONSENT_TOKEN": self.owner_consent_token, "MYCOMP_PUBLIC_BASE_URL": self.domain.get().strip(), "MYCOMP_OAUTH_REDIRECT_URIS": self.callback.get().strip(), "MYCOMP_ALLOWED_ROOTS": self.roots.get().strip(), "MYCOMP_PERMISSION_LEVEL": self.level.get(), "MYCOMP_UI_CAPABILITY": "windows_ui"}
@@ -409,6 +442,13 @@ class MyCompBot(tk.Tk):
         _write_env(self._values()); self._refresh_endpoint()
         if self.process and self.process.poll() is None:
             self._stop(); self._start()
+
+    def _toggle_autostart(self) -> None:
+        try:
+            _set_autostart(self.autostart.get())
+        except OSError as exc:
+            self.autostart.set(_autostart_enabled())
+            messagebox.showerror("Windows startup", f"Could not update Windows startup: {exc}")
 
     def _engine_env(self) -> dict[str, str]:
         values = self._values()
@@ -594,6 +634,7 @@ class MyCompBot(tk.Tk):
     def _setup_tray(self) -> None:
         menu = pystray.Menu(
             pystray.MenuItem("Open MyComp Bot", lambda icon, item: self.after(0, self._show_from_tray), default=True),
+            pystray.MenuItem("Report Error on GitHub", lambda icon, item: webbrowser.open(ISSUE_URL)),
             pystray.MenuItem("Exit", lambda icon, item: self.after(0, self._quit)),
         )
         self.tray_icon = pystray.Icon("MyCompBot", self._tray_image(), "MyComp Bot - Running", menu)

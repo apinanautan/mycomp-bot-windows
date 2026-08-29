@@ -4,6 +4,23 @@ param([switch]$PlanOnly)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $target = 'http://127.0.0.1:8645'
+$issueBase = 'https://github.com/apinanautan/mycomp-bot-windows/issues/new'
+$errorLog = Join-Path $env:LOCALAPPDATA 'MyComp Bot\install-error.log'
+
+trap {
+    $details = ($_ | Out-String).Trim()
+    try {
+        $null = New-Item -ItemType Directory -Force -Path (Split-Path -Parent $errorLog)
+        [IO.File]::WriteAllText($errorLog, "$(Get-Date -Format o)`r`n$details`r`n", [Text.UTF8Encoding]::new($false))
+        $summary = $details -replace '(?i)(token|secret|password)=\S+', '$1=[redacted]'
+        if ($summary.Length -gt 2000) { $summary = $summary.Substring(0, 2000) }
+        $title = [uri]::EscapeDataString('MyComp Bot installer error')
+        $body = [uri]::EscapeDataString("Installer error:`r`n`r`n$summary`r`n`r`nLocal log: $errorLog")
+        Start-Process "$issueBase?title=$title&body=$body"
+    } catch {}
+    Write-Host "Setup failed. The error was saved to $errorLog and a GitHub Issue draft was opened for review." -ForegroundColor Red
+    exit 1
+}
 
 function Find-Tailscale {
     $command = Get-Command tailscale.exe -ErrorAction SilentlyContinue
@@ -120,3 +137,4 @@ Write-Host ''
 Write-Host 'MyComp Bot is running.' -ForegroundColor Green
 Write-Host "MCP URL: $endpoint"
 Write-Host 'The MCP URL was copied to the clipboard. Paste the ChatGPT callback URL in the app once when connecting a new computer.'
+Write-Host 'Use the checkbox in the app to start MyComp Bot automatically whenever you sign in to Windows.'

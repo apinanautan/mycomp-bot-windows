@@ -18,6 +18,12 @@ and copies it to the clipboard. A new computer still needs its ChatGPT callback
 URL pasted into the desktop app once. OAuth tokens and Tailscale account keys
 are deliberately never stored in this repository.
 
+After installation, MyComp Bot stays available from the Windows notification
+area. Enable **Start MyComp Bot automatically when I sign in to Windows** in
+the desktop window to register it under the current user's Windows startup.
+Installation failures are saved locally and open a prefilled GitHub Issue draft
+for review; no log or machine data is submitted until the user clicks Submit.
+
 ## One-click developer start
 
 Install Python 3.11 or later, clone the repository, then right-click
