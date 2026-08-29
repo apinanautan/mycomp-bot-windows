@@ -10,7 +10,7 @@ if /i "%~1"=="--plan" set "INSTALL_ARGS=-PlanOnly"
 
 if exist "%LOCAL_INSTALLER%" goto run_installer
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $zip=Join-Path $env:TEMP ('mycomp-bot-'+[guid]::NewGuid().ToString('N')+'.zip'); $unpack=$zip+'.d'; try { Invoke-WebRequest -UseBasicParsing $env:REPO_ZIP -OutFile $zip; Expand-Archive -LiteralPath $zip -DestinationPath $unpack; $source=Join-Path $unpack 'mycomp-bot-windows-main'; New-Item -ItemType Directory -Force -Path $env:DEST ^| Out-Null; Get-ChildItem -LiteralPath $source -Force ^| Copy-Item -Destination $env:DEST -Recurse -Force } finally { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath $unpack -Recurse -Force -ErrorAction SilentlyContinue }"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $zip=Join-Path $env:TEMP ('mycomp-bot-'+[guid]::NewGuid().ToString('N')+'.zip'); $unpack=$zip+'.d'; try { Invoke-WebRequest -UseBasicParsing $env:REPO_ZIP -OutFile $zip; Expand-Archive -LiteralPath $zip -DestinationPath $unpack; $source=Join-Path $unpack 'mycomp-bot-windows-main'; $null=New-Item -ItemType Directory -Force -Path $env:DEST; Copy-Item -Path (Join-Path $source '*') -Destination $env:DEST -Recurse -Force } finally { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath $unpack -Recurse -Force -ErrorAction SilentlyContinue }"
 if errorlevel 1 goto download_failed
 set "LOCAL_INSTALLER=%DEST%\windows\Install MyComp Bot.ps1"
 
