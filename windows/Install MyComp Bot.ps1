@@ -64,7 +64,8 @@ function Find-Python311 {
 }
 
 function Set-EnvValue([string]$Path, [string]$Key, [string]$Value, [switch]$OnlyIfMissing) {
-    $lines = if (Test-Path $Path) { [Collections.Generic.List[string]](Get-Content -LiteralPath $Path) } else { [Collections.Generic.List[string]]::new() }
+    [string[]]$lines = @()
+    if (Test-Path $Path) { $lines = @(Get-Content -LiteralPath $Path) }
     $index = -1
     for ($i = 0; $i -lt $lines.Count; $i++) {
         if ($lines[$i] -match ('^' + [regex]::Escape($Key) + '=')) { $index = $i; break }
@@ -72,7 +73,7 @@ function Set-EnvValue([string]$Path, [string]$Key, [string]$Value, [switch]$Only
     if ($index -ge 0) {
         if (-not $OnlyIfMissing) { $lines[$index] = "$Key=$Value" }
     } else {
-        $lines.Add("$Key=$Value")
+        $lines += "$Key=$Value"
     }
     [IO.File]::WriteAllLines($Path, $lines, [Text.UTF8Encoding]::new($false))
 }
