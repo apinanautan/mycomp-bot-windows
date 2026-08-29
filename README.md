@@ -22,7 +22,9 @@ After installation, MyComp Bot stays available from the Windows notification
 area. Enable **Start MyComp Bot automatically when I sign in to Windows** in
 the desktop window to register it under the current user's Windows startup.
 Installation failures are saved locally and open a prefilled GitHub Issue draft
-for review; no log or machine data is submitted until the user clicks Submit.
+for review. The actual error is also printed in the installer, opened in Notepad,
+and copied to the clipboard; Git is not required. No log or machine data is
+submitted until the user clicks Submit.
 
 ## One-click developer start
 

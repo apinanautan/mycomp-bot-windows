@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([switch]$PlanOnly)
+param([switch]$PlanOnly, [switch]$NoErrorUi)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -9,16 +9,34 @@ $errorLog = Join-Path $env:LOCALAPPDATA 'MyComp Bot\install-error.log'
 
 trap {
     $details = ($_ | Out-String).Trim()
+    $logSaved = $false
     try {
         $null = New-Item -ItemType Directory -Force -Path (Split-Path -Parent $errorLog)
         [IO.File]::WriteAllText($errorLog, "$(Get-Date -Format o)`r`n$details`r`n", [Text.UTF8Encoding]::new($false))
+        $logSaved = $true
+    } catch {}
+
+    Write-Host ''
+    Write-Host 'Actual setup error:' -ForegroundColor Red
+    Write-Host $details -ForegroundColor Red
+    $copied = $false
+    $notepadOpened = $false
+    if (-not $NoErrorUi) {
+        try { Set-Clipboard -Value $details; $copied = $true } catch {}
+        if ($logSaved) {
+            try { Start-Process notepad.exe -ArgumentList ('"{0}"' -f $errorLog); $notepadOpened = $true } catch {}
+        }
+    }
+    try {
         $summary = $details -replace '(?i)(token|secret|password)=\S+', '$1=[redacted]'
         if ($summary.Length -gt 2000) { $summary = $summary.Substring(0, 2000) }
         $title = [uri]::EscapeDataString('MyComp Bot installer error')
         $body = [uri]::EscapeDataString("Installer error:`r`n`r`n$summary`r`n`r`nLocal log: $errorLog")
-        Start-Process "$issueBase?title=$title&body=$body"
+        if (-not $NoErrorUi) { Start-Process "$issueBase?title=$title&body=$body" }
     } catch {}
-    Write-Host "Setup failed. The error was saved to $errorLog and a GitHub Issue draft was opened for review." -ForegroundColor Red
+    if ($notepadOpened) { Write-Host "The error log was opened in Notepad and saved to $errorLog" -ForegroundColor Yellow }
+    elseif ($logSaved) { Write-Host "The error log was saved to $errorLog" -ForegroundColor Yellow }
+    if ($copied) { Write-Host 'The error was copied to the clipboard. Git is not required.' -ForegroundColor Yellow }
     exit 1
 }
 
