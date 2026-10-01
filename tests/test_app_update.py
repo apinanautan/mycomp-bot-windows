@@ -1,4 +1,5 @@
 import io
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -83,6 +84,20 @@ class AppUpdateTests(unittest.TestCase):
                 run.return_value.stdout = " M windows/MyCompBot.py"
                 with self.assertRaises(RuntimeError):
                     update.check_checkout(root)
+
+    def test_parent_exit_timeout_never_replaces_files_or_launches_second_app(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            arguments = ['update', '--root', str(base), '--source', str(base),
+                         '--parent-pid', '1234', '--log', str(base / 'update.log')]
+            with patch.object(sys, 'argv', arguments), \
+                 patch.object(update, 'wait_for_parent', side_effect=RuntimeError('parent still running')), \
+                 patch.object(update, 'apply_files') as apply, \
+                 patch.object(update, 'restart') as restart, \
+                 patch.object(update.ctypes, 'windll', create=True):
+                update.main()
+            apply.assert_not_called()
+            restart.assert_not_called()
 
 
 if __name__ == "__main__":

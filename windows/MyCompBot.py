@@ -1079,4 +1079,9 @@ class MyCompBot(tk.Tk):
 
 if __name__ == "__main__":
     if _claim_single_instance():
-        MyCompBot().mainloop()
+        application = MyCompBot()
+        application.mainloop()
+        if application._closing:
+            # Detached tray threads must not keep the old process and its
+            # single-instance mutex alive after an update handoff.
+            os._exit(0)

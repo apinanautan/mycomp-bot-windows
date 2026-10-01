@@ -191,6 +191,7 @@ def main() -> None:
     args = parser.parse_args()
     args.log.parent.mkdir(parents=True, exist_ok=True)
     running = False
+    parent_exited = False
     def install_and_restart(root: Path, log) -> None:
         nonlocal running
         install_dependencies(root, log)
@@ -214,6 +215,7 @@ def main() -> None:
     with args.log.open("a", encoding="utf-8") as log:
         try:
             wait_for_parent(args.parent_pid)
+            parent_exited = True
             print(f"Updating {args.root}", file=log, flush=True)
             apply_files(args.root, args.source, log, install=install_and_restart)
             print("Update installed successfully", file=log, flush=True)
@@ -221,7 +223,7 @@ def main() -> None:
             print(f"Update failed: {error}", file=log, flush=True)
             ctypes.windll.user32.MessageBoxW(None, f"Update failed: {error}\nLog: {args.log}", "MyComp Bot update", 0x10)
         finally:
-            if not running:
+            if parent_exited and not running:
                 restart(args.root)
 
 
