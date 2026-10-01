@@ -65,9 +65,25 @@ class HTTPIntegrationTests(unittest.TestCase):
                 self.assertEqual(discovered.status_code, 200)
                 self.assertEqual(discovered.json()["registration_endpoint"], f"{PUBLIC_MCP_ENDPOINT.removesuffix('/mcp')}/register")
             self.assertEqual(metadata.json()["token_endpoint_auth_methods_supported"], ["none"])
+            self.assertTrue(metadata.json()["client_id_metadata_document_supported"])
             self.assertEqual(metadata.json()["registration_endpoint"], f"{PUBLIC_MCP_ENDPOINT.removesuffix('/mcp')}/register")
             self.assertIn("offline_access", metadata.json()["scopes_supported"])
             self.assertIn("mcp", metadata.json()["scopes_supported"])
+
+            # Current MCP clients may use their HTTPS metadata-document URL as
+            # client_id instead of dynamic registration.
+            cimd_client_id = "https://chatgpt.com/.well-known/oauth-client/mycomp-test"
+            cimd_redirect = "https://chatgpt.com/connector/oauth/mycomp-cimd-test"
+            cimd_oauth = {**oauth, "client_id": cimd_client_id, "redirect_uri": cimd_redirect}
+            cimd_authorization = client.get("/authorize", params=cimd_oauth)
+            self.assertEqual(cimd_authorization.status_code, 200)
+            cimd_approval = client.post(
+                "/authorize",
+                data={**cimd_oauth, "owner_consent": self.consent},
+                follow_redirects=False,
+            )
+            self.assertEqual(cimd_approval.status_code, 200)
+            self.assertIn(cimd_redirect, html.unescape(cimd_approval.text))
 
             registration = client.post(
                 "/register",
@@ -180,11 +196,41 @@ class HTTPIntegrationTests(unittest.TestCase):
             self.assertEqual(protected.json()["resource"], "https://mcp.example.com/mcp")
             self.assertEqual(protected.json()["authorization_servers"], ["https://mcp.example.com"])
 
+    def test_public_path_prefix_drives_oauth_metadata_and_consent_form(self):
+        settings = dataclasses.replace(self.settings, public_base_url="https://mcp.example.com/mycomp")
+        with TestClient(create_app(settings), base_url="http://127.0.0.1:8645") as client:
+            metadata = client.get("/.well-known/oauth-authorization-server")
+            self.assertEqual(metadata.status_code, 200)
+            self.assertEqual(metadata.json()["authorization_endpoint"], "https://mcp.example.com/mycomp/authorize")
+            self.assertEqual(metadata.json()["token_endpoint"], "https://mcp.example.com/mycomp/token")
+            protected = client.get("/.well-known/oauth-protected-resource")
+            self.assertEqual(protected.json()["resource"], "https://mcp.example.com/mycomp/mcp")
+            self.assertEqual(protected.json()["authorization_servers"], ["https://mcp.example.com/mycomp"])
+            page = client.get("/authorize", params={
+                "response_type": "code", "client_id": "client", "redirect_uri": "https://chatgpt.com/callback",
+                "code_challenge": "challenge", "code_challenge_method": "S256", "state": "state",
+            })
+            self.assertEqual(page.status_code, 200)
+            self.assertIn("action='https://mcp.example.com/mycomp/authorize'", page.text)
+
     def test_unauthenticated_mcp_tool_listing_when_auth_mode_is_none(self):
         settings = dataclasses.replace(self.settings, auth_mode="none")
         protocol_headers = {"Accept": "application/json, text/event-stream"}
 
         with TestClient(create_app(settings), base_url="http://127.0.0.1:8645") as client:
+            self.assertEqual(client.get("/health").json()["auth_mode"], "none")
+            for path in (
+                "/.well-known/oauth-protected-resource",
+                "/.well-known/oauth-protected-resource/mcp",
+                "/mcp/.well-known/oauth-protected-resource",
+                "/.well-known/oauth-authorization-server",
+                "/.well-known/oauth-authorization-server/mcp",
+                "/mcp/.well-known/oauth-authorization-server",
+                "/authorize",
+            ):
+                self.assertEqual(client.get(path).status_code, 404, path)
+            for path in ("/register", "/authorize", "/token"):
+                self.assertEqual(client.post(path).status_code, 404, path)
             initialized = client.post(
                 "/mcp",
                 headers=protocol_headers,

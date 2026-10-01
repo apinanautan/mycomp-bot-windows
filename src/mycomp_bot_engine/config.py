@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -38,7 +39,7 @@ def _default_app_data() -> Path:
 
 
 def _validated_public_base_url(value: str) -> str:
-    """Return a canonical HTTPS origin used for all public OAuth endpoints."""
+    """Return a canonical HTTPS base used for all public OAuth endpoints."""
     normalized = value.strip() or PUBLIC_BASE_URL
     parsed = urlsplit(normalized)
     if (
@@ -48,10 +49,10 @@ def _validated_public_base_url(value: str) -> str:
         or parsed.password
         or parsed.query
         or parsed.fragment
-        or parsed.path not in {"", "/"}
+        or (parsed.path.rstrip("/") and not re.fullmatch(r"/[A-Za-z0-9_-]+", parsed.path.rstrip("/")))
     ):
-        raise ValueError("MYCOMP_PUBLIC_BASE_URL must be an HTTPS origin without a path, query, or fragment")
-    return urlunsplit(("https", parsed.netloc, "", "", ""))
+        raise ValueError("MYCOMP_PUBLIC_BASE_URL must be an HTTPS base with an optional simple path, without query or fragment")
+    return urlunsplit(("https", parsed.netloc, parsed.path.rstrip("/"), "", ""))
 
 
 @dataclass(frozen=True)

@@ -662,14 +662,15 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
     return mcp
 
 
-def create_app(settings: Settings | None = None):
+def create_app(settings: Settings | None = None, resources: EngineResources | None = None):
     from starlette.applications import Starlette
     from starlette.middleware.cors import CORSMiddleware
     from starlette.requests import Request
     from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
     from starlette.routing import Mount, Route
     settings = settings or Settings.from_env()
-    resources = _build_resources(settings)
+    owns_resources = resources is None
+    resources = resources or _build_resources(settings)
     database, oauth = resources.database, resources.oauth
     mcp = build_server(settings, resources)
     oauth_headers = {"Cache-Control": "no-store", "Pragma": "no-cache"}
@@ -728,7 +729,8 @@ def create_app(settings: Settings | None = None):
         form_fields = set(required) | {"scope", "resource"}
         hidden = "".join(f'<input type="hidden" name="{html.escape(key, quote=True)}" value="{html.escape(query.get(key, ""), quote=True)}">' for key in form_fields if key in query)
         headers = {"Content-Security-Policy": "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'", "X-Frame-Options": "DENY", **oauth_headers}
-        return HTMLResponse(f"<!doctype html><html><body><h1>MyComp Bot authorization</h1><form method='post' action='/authorize'>{hidden}<label>Owner consent code <input type='password' name='owner_consent' required autofocus></label><input type='submit' value='Approve'></form></body></html>", headers=headers)
+        action = html.escape(settings.authorization_endpoint, quote=True)
+        return HTMLResponse(f"<!doctype html><html><body><h1>MyComp Bot authorization</h1><form method='post' action='{action}'>{hidden}<label>Owner consent code <input type='password' name='owner_consent' required autofocus></label><input type='submit' value='Approve'></form></body></html>", headers=headers)
 
     async def authorize_post(request: Request):
         try: form = await bounded_form(request)
@@ -752,30 +754,33 @@ def create_app(settings: Settings | None = None):
             else: raise ValueError("unsupported grant type")
         except (PermissionError, ValueError) as error: return JSONResponse({"error": "invalid_grant", "error_description": str(error)}, status_code=400, headers=oauth_headers)
         return JSONResponse({"access_token": grant.access_token, "refresh_token": grant.refresh_token, "token_type": "Bearer", "expires_in": grant.expires_in, "scope": grant.scope}, headers=oauth_headers)
-    async def health(request: Request): return JSONResponse(resources.runtime.health())
+    async def health(request: Request): return JSONResponse({**resources.runtime.health(), "auth_mode": settings.auth_mode})
     advertised_levels = PERMISSION_LEVELS[:PERMISSION_LEVELS.index(settings.permission_level) + 1]
     async def protected(request: Request): return JSONResponse({"resource": settings.public_mcp_endpoint, "authorization_servers": [settings.public_base_url], "scopes_supported": ["mycomp", MCP_COMPATIBILITY_SCOPE, *[level_scope(level) for level in advertised_levels]]})
-    async def metadata(request: Request): return JSONResponse({"issuer": settings.public_base_url, "authorization_endpoint": settings.authorization_endpoint, "token_endpoint": settings.token_endpoint, "registration_endpoint": settings.registration_endpoint, "token_endpoint_auth_methods_supported": ["none"], "response_types_supported": ["code"], "grant_types_supported": ["authorization_code", "refresh_token"], "code_challenge_methods_supported": ["S256"], "scopes_supported": ["mycomp", MCP_COMPATIBILITY_SCOPE, *[level_scope(level) for level in advertised_levels], OFFLINE_ACCESS_SCOPE], "resource_parameter_supported": True})
+    async def metadata(request: Request): return JSONResponse({"issuer": settings.public_base_url, "authorization_endpoint": settings.authorization_endpoint, "token_endpoint": settings.token_endpoint, "registration_endpoint": settings.registration_endpoint, "client_id_metadata_document_supported": True, "token_endpoint_auth_methods_supported": ["none"], "response_types_supported": ["code"], "grant_types_supported": ["authorization_code", "refresh_token"], "code_challenge_methods_supported": ["S256"], "scopes_supported": ["mycomp", MCP_COMPATIBILITY_SCOPE, *[level_scope(level) for level in advertised_levels], OFFLINE_ACCESS_SCOPE], "resource_parameter_supported": True})
     @contextlib.asynccontextmanager
     async def lifespan(app):
         try:
             async with mcp.session_manager.run():
                 yield
         finally:
-            resources.close()
+            if owns_resources:
+                resources.close()
     app = Starlette(
         routes=[
             Route("/health", health),
-            Route("/.well-known/oauth-protected-resource", protected),
-            Route("/.well-known/oauth-protected-resource/mcp", protected),
-            Route("/mcp/.well-known/oauth-protected-resource", protected),
-            Route("/.well-known/oauth-authorization-server", metadata),
-            Route("/.well-known/oauth-authorization-server/mcp", metadata),
-            Route("/mcp/.well-known/oauth-authorization-server", metadata),
-            Route("/register", register, methods=["POST"]),
-            Route("/authorize", authorize, methods=["GET"]),
-            Route("/authorize", authorize_post, methods=["POST"]),
-            Route("/token", token, methods=["POST"]),
+            *([
+                Route("/.well-known/oauth-protected-resource", protected),
+                Route("/.well-known/oauth-protected-resource/mcp", protected),
+                Route("/mcp/.well-known/oauth-protected-resource", protected),
+                Route("/.well-known/oauth-authorization-server", metadata),
+                Route("/.well-known/oauth-authorization-server/mcp", metadata),
+                Route("/mcp/.well-known/oauth-authorization-server", metadata),
+                Route("/register", register, methods=["POST"]),
+                Route("/authorize", authorize, methods=["GET"]),
+                Route("/authorize", authorize_post, methods=["POST"]),
+                Route("/token", token, methods=["POST"]),
+            ] if settings.require_auth else []),
             Mount("/", app=mcp.streamable_http_app()),
         ],
         lifespan=lifespan,

@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import ctypes
+import ipaddress
 import json
 import os
 import queue
@@ -17,6 +18,7 @@ import uuid
 import webbrowser
 import winreg
 import zlib
+from urllib.parse import urlencode, urlsplit
 from ctypes import wintypes
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -24,17 +26,56 @@ from tkinter import messagebox, ttk
 import pystray
 from PIL import Image, ImageDraw
 
+if __package__:
+    from . import app_update
+else:
+    import app_update
+
 
 ROOT = Path(__file__).resolve().parent.parent
+APP_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 APP_DATA = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / "MyComp Bot"
 CONFIG = APP_DATA / ".env"
 RUNTIME = APP_DATA / "runtime"
 COMMANDS, RESULTS = RUNTIME / "ui-commands", RUNTIME / "ui-results"
+SHOW_WINDOW_REQUEST = RUNTIME / "show-window.request"
 LOCAL_HEALTH = "http://127.0.0.1:8645/health"
+TAILSCALE_EXE = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Tailscale" / "tailscale.exe"
+TAILSCALE_HOST = ""
+TAILSCALE_HTTPS_PORT = 443
+TAILSCALE_PATH = "/"
+TAILSCALE_PUBLIC_HEALTH = ""
+TAILSCALE_AUTOFIX_INTERVAL = 60
+REMOTE_COMMANDER_PACKAGE = "@wonderwhy-er/desktop-commander"
 UI_AUTOMATION_HELPER = Path(__file__).resolve().with_name("UIAutomationBridge.ps1")
 AUTOSTART_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 AUTOSTART_NAME = "MyComp Bot"
 ISSUE_URL = "https://github.com/apinanautan/mycomp-bot-windows/issues/new?title=MyComp%20Bot%20error"
+_SINGLE_INSTANCE_MUTEX = None
+
+
+def _claim_single_instance(
+    name: str = r"Local\MyCompBot.Windows.SingleInstance",
+    request_path: Path = SHOW_WINDOW_REQUEST,
+) -> bool:
+    global _SINGLE_INSTANCE_MUTEX
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.argtypes = (ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR)
+    kernel32.CreateMutexW.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    ctypes.set_last_error(0)
+    handle = kernel32.CreateMutexW(None, True, name)
+    if not handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+        kernel32.CloseHandle(handle)
+        request_path.parent.mkdir(parents=True, exist_ok=True)
+        request_path.touch()
+        return False
+    _SINGLE_INSTANCE_MUTEX = handle
+    request_path.unlink(missing_ok=True)
+    return True
 
 
 def _autostart_command() -> str:
@@ -84,6 +125,115 @@ def _write_env(values: dict[str, str]) -> None:
     os.replace(temporary, CONFIG)
 
 
+def _tailscale_command() -> str:
+    return shutil.which("tailscale.exe") or str(TAILSCALE_EXE)
+
+
+def _configure_tailscale_endpoint(public_base: str) -> None:
+    global TAILSCALE_HOST, TAILSCALE_HTTPS_PORT, TAILSCALE_PATH, TAILSCALE_PUBLIC_HEALTH
+    parsed = urlsplit(public_base)
+    if parsed.scheme != "https" or not parsed.hostname or not parsed.hostname.endswith(".ts.net") or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("Configure your Tailscale HTTPS domain before checking Funnel.")
+    port = parsed.port or 443
+    if port not in {443, 8443, 10000}:
+        raise ValueError("Tailscale Funnel uses HTTPS ports 443, 8443, or 10000.")
+    TAILSCALE_HOST = parsed.hostname
+    TAILSCALE_HTTPS_PORT = port
+    TAILSCALE_PATH = parsed.path.rstrip("/") or "/"
+    TAILSCALE_PUBLIC_HEALTH = public_base.rstrip("/") + "/health"
+
+
+def _public_funnel_ips() -> list[str]:
+    query = urlencode({"name": TAILSCALE_HOST, "type": "A"})
+    request = urllib.request.Request(
+        f"https://cloudflare-dns.com/dns-query?{query}",
+        headers={"accept": "application/dns-json"},
+    )
+    with urllib.request.urlopen(request, timeout=8) as response:
+        answers = json.load(response).get("Answer", [])
+    addresses = []
+    for answer in answers:
+        if answer.get("type") != 1:
+            continue
+        try:
+            address = ipaddress.ip_address(answer.get("data", ""))
+        except ValueError:
+            continue
+        if address.version == 4 and address.is_global:
+            addresses.append(str(address))
+    if not addresses:
+        raise RuntimeError("Public DNS returned no globally routable Funnel IPv4 address")
+    return addresses
+
+
+def _probe_public_funnel() -> str:
+    curl = shutil.which("curl.exe") or "curl.exe"
+    errors = []
+    for address in _public_funnel_ips():
+        try:
+            result = subprocess.run(
+                [curl, "--silent", "--show-error", "--max-time", "12", "--resolve",
+                 f"{TAILSCALE_HOST}:{TAILSCALE_HTTPS_PORT}:{address}", TAILSCALE_PUBLIC_HEALTH],
+                capture_output=True, text=True, timeout=15,
+                creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
+            )
+            health = json.loads(result.stdout) if result.returncode == 0 else {}
+            if health.get("status") == "ok" and health.get("service") == "mycomp-bot":
+                return address
+            errors.append(result.stderr.strip() or f"unexpected health response from {address}")
+        except Exception as error:
+            errors.append(str(error))
+    raise RuntimeError("Public Funnel probe failed: " + "; ".join(errors))
+
+
+def _funnel_route_is_mycomp(status: dict[str, object]) -> bool:
+    web = status.get("Web", {})
+    if not isinstance(web, dict):
+        return False
+    entry = web.get(f"{TAILSCALE_HOST}:{TAILSCALE_HTTPS_PORT}", {})
+    handlers = entry.get("Handlers", {}) if isinstance(entry, dict) else {}
+    route = handlers.get(TAILSCALE_PATH, {}) if isinstance(handlers, dict) else {}
+    proxy = route.get("Proxy", "") if isinstance(route, dict) else ""
+    return str(proxy).rstrip("/") == "http://127.0.0.1:8645"
+
+
+def _repair_mycomp_funnel() -> None:
+    tailscale = _tailscale_command()
+    subprocess.run(
+        [tailscale, "funnel", f"--https={TAILSCALE_HTTPS_PORT}",
+         f"--set-path={TAILSCALE_PATH}", "off"],
+        capture_output=True, text=True, timeout=15,
+        creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
+    )
+    result = subprocess.run(
+        [tailscale, "funnel", "--bg", "--yes", f"--https={TAILSCALE_HTTPS_PORT}",
+         f"--set-path={TAILSCALE_PATH}", "http://127.0.0.1:8645/"],
+        capture_output=True, text=True, timeout=20,
+        creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
+    )
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip() or f"tailscale exited {result.returncode}"
+        raise RuntimeError("Could not restore only the MyComp /mycomp Funnel route: " + detail)
+
+
+def _remote_commander_pid() -> int | None:
+    script = (
+        '$n="@"+"wonderwhy-er"+"/"+"desktop-commander"; '
+        '$p=Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and '
+        '$_.CommandLine.Contains($n) -and $_.CommandLine.Contains("remote") } | '
+        'Select-Object -First 1 -ExpandProperty ProcessId; if($p){$p}'
+    )
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True, text=True, timeout=10,
+        creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
+    )
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or "Could not check for an existing Remote Desktop Commander agent")
+    value = result.stdout.strip()
+    return int(value.splitlines()[-1]) if value else None
+
+
 def _defaults() -> dict[str, str]:
     home = Path.home()
     return {
@@ -92,6 +242,8 @@ def _defaults() -> dict[str, str]:
         "MYCOMP_PERMISSION_LEVEL": "normal",
         "MYCOMP_AUTH_MODE": "oauth",
         "MYCOMP_PUBLIC_BASE_URL": "",
+        "MYCOMP_TAILSCALE_AUTOFIX": "true",
+        "MYCOMP_REMOTE_DESKTOP_COMMANDER_AUTOSTART": "true",
         "MYCOMP_OAUTH_REDIRECT_URIS": "",
         "MYCOMP_OWNER_CONSENT_TOKEN": secrets.token_urlsafe(32),
         "MYCOMP_ALLOW_SHELL": "true",
@@ -381,16 +533,36 @@ class MyCompBot(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("MyComp Bot for Windows")
-        self.minsize(700, 480)
+        self.minsize(760, 740)
         self.process: subprocess.Popen[str] | None = None
         self.tunnel: subprocess.Popen[str] | None = None
+        self.tray_icon: pystray.Icon | None = None
         self.tunnel_queue: queue.Queue[str] = queue.Queue()
+        self.tailscale_queue: queue.Queue[tuple[bool, bool, str]] = queue.Queue()
+        self.tailscale_autofix = _read_env().get("MYCOMP_TAILSCALE_AUTOFIX", "true").lower() in {"1", "true", "yes", "on"}
+        self.tailscale_busy = False
+        self.tailscale_public_failures = 0
+        self.next_tailscale_check = time.monotonic() + TAILSCALE_AUTOFIX_INTERVAL
+        self.remote_commander_process: subprocess.Popen[str] | None = None
+        self.remote_commander_log = None
+        self.remote_commander_autostart = tk.BooleanVar(value=True)
+        self.remote_commander_autostart_enabled = True
+        self.remote_commander_pid: int | None = None
+        self.remote_commander_status = tk.StringVar(value="Not started")
+        self.update_queue: queue.Queue[tuple[str, object]] = queue.Queue()
+        self.update_busy = False
+        self._closing = False
+        self.update_status = tk.StringVar(value=f"Version {APP_VERSION}")
         self.temporary_url: str | None = None
         self.input = WindowsInput()
         self.capture = WindowsCapture(RUNTIME / "screenshots")
         self.automation = WindowsUIAutomation()
         values = {**_defaults(), **_read_env()}
         self.owner_consent_token = values["MYCOMP_OWNER_CONSENT_TOKEN"] or secrets.token_urlsafe(32)
+        self.remote_commander_autostart_enabled = (
+            values["MYCOMP_REMOTE_DESKTOP_COMMANDER_AUTOSTART"].lower() in {"1", "true", "yes", "on"}
+        )
+        self.remote_commander_autostart.set(self.remote_commander_autostart_enabled)
         self.domain = tk.StringVar(value=values["MYCOMP_PUBLIC_BASE_URL"])
         self.callback = tk.StringVar(value=values["MYCOMP_OAUTH_REDIRECT_URIS"])
         self.roots = tk.StringVar(value=values["MYCOMP_ALLOWED_ROOTS"])
@@ -403,6 +575,10 @@ class MyCompBot(tk.Tk):
         for directory in (COMMANDS, RESULTS):
             directory.mkdir(parents=True, exist_ok=True)
         self.after(0, self._start)
+        if self.remote_commander_autostart.get():
+            self.after(1500, lambda: self._start_remote_commander(manual=False))
+        if not self.domain.get().strip():
+            self.after(250, self._start_tunnel)
         self.after(200, self._poll)
         self.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
         self._setup_tray()
@@ -433,7 +609,130 @@ class MyCompBot(tk.Tk):
         ttk.Button(frame, text="Open ChatGPT Plugins & Copy MCP URL", command=self._open_chatgpt_plugins).grid(row=11, column=1, sticky="w", pady=(12, 0))
         ttk.Button(frame, text="Copy Owner Consent Code", command=self._copy_owner_consent_code).grid(row=11, column=2, sticky="e", pady=(12, 0))
         ttk.Checkbutton(frame, text="Start MyComp Bot automatically when I sign in to Windows", variable=self.autostart, command=self._toggle_autostart).grid(row=12, column=0, columnspan=3, sticky="w", pady=(18, 0))
-        ttk.Label(frame, text="Mouse/keyboard actions require Elevated. Accessibility uses Windows UI Automation; screen capture uses native Win32 capture. OCR is intentionally unavailable for now.", wraplength=640).grid(row=13, column=0, columnspan=3, sticky="w", pady=(12, 0))
+        ttk.Checkbutton(frame, text="Start Remote Desktop Commander automatically with MyComp Bot", variable=self.remote_commander_autostart, command=self._toggle_remote_commander_autostart).grid(row=13, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        ttk.Label(frame, text="Remote Desktop Commander").grid(row=14, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(frame, textvariable=self.remote_commander_status).grid(row=14, column=1, columnspan=2, sticky="w", padx=(12, 0), pady=(8, 0))
+        ttk.Button(frame, text="Start Remote Desktop Commander now", command=lambda: self._start_remote_commander(manual=True)).grid(row=15, column=1, sticky="w", pady=(6, 0))
+
+        ttk.Button(frame, text="Update MyComp Bot", command=self._request_update).grid(row=16, column=1, sticky="w", pady=(10, 0))
+        ttk.Label(frame, textvariable=self.update_status, wraplength=600).grid(row=17, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Label(frame, text="Mouse/keyboard actions require Elevated. Accessibility uses Windows UI Automation; screen capture uses native Win32 capture. OCR uses RapidOCR with ONNX Runtime. Tailscale provides the public HTTPS connection.", wraplength=700).grid(row=18, column=0, columnspan=3, sticky="w", pady=(12, 0))
+
+    def _request_update(self) -> None:
+        if self.update_busy:
+            return
+        self.update_busy = True
+        self.update_status.set("Checking GitHub for updates...")
+        threading.Thread(target=self._check_update_worker, daemon=True).start()
+
+    def _check_update_worker(self) -> None:
+        try:
+            release = app_update.latest_release()
+            if app_update.version_tuple(release["tag"]) <= app_update.version_tuple(APP_VERSION):
+                self.update_queue.put(("current", release["tag"]))
+            else:
+                app_update.check_checkout(ROOT)
+                self.update_queue.put(("available", release))
+        except Exception as error:
+            self.update_queue.put(("error", str(error)))
+
+    def _prepare_update_worker(self, release: dict[str, str]) -> None:
+        try:
+            source = app_update.prepare_update(release, APP_DATA / "updates")
+            self.update_queue.put(("ready", source))
+        except Exception as error:
+            self.update_queue.put(("error", str(error)))
+
+    def _process_update_events(self) -> None:
+        try:
+            while True:
+                event, value = self.update_queue.get_nowait()
+                if event == "current":
+                    self.update_busy = False
+                    self.update_status.set(f"Version {APP_VERSION} — up to date")
+                    messagebox.showinfo("MyComp Bot update", f"MyComp Bot {APP_VERSION} is up to date.")
+                elif event == "available":
+                    if messagebox.askyesno("MyComp Bot update", f"Install {value['tag']}? MyComp Bot will close and reopen after updating. Your settings will be kept."):
+                        self.update_status.set(f"Downloading {value['tag']}...")
+                        threading.Thread(target=self._prepare_update_worker, args=(value,), daemon=True).start()
+                    else:
+                        self.update_busy = False
+                        self.update_status.set(f"Version {APP_VERSION} — {value['tag']} available")
+                elif event == "ready":
+                    try:
+                        helper = APP_DATA / "updates" / f"apply-{uuid.uuid4().hex}.py"
+                        shutil.copy2(Path(app_update.__file__), helper)
+                        subprocess.Popen([
+                            str(getattr(sys, "_base_executable", sys.executable)), str(helper),
+                            "--root", str(ROOT), "--source", str(value),
+                            "--parent-pid", str(os.getpid()), "--log", str(APP_DATA / "update.log"),
+                        ], cwd=str(APP_DATA), creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP)
+                        self._quit()
+                        return
+                    except Exception as error:
+                        self.update_queue.put(("error", str(error)))
+                elif event == "error":
+                    self.update_busy = False
+                    self.update_status.set(f"Update failed: {value}")
+                    messagebox.showerror("MyComp Bot update", str(value))
+        except queue.Empty:
+            pass
+
+    def _toggle_remote_commander_autostart(self, enabled: bool | None = None) -> None:
+        if enabled is None:
+            enabled = bool(self.remote_commander_autostart.get())
+        self.remote_commander_autostart_enabled = enabled
+        self.remote_commander_autostart.set(enabled)
+        values = _read_env()
+        values["MYCOMP_REMOTE_DESKTOP_COMMANDER_AUTOSTART"] = "true" if enabled else "false"
+        _write_env(values)
+        if self.tray_icon is not None:
+            self.tray_icon.update_menu()
+        if enabled:
+            self._start_remote_commander(manual=False)
+
+    def _start_remote_commander(self, manual: bool = False) -> None:
+        if self.remote_commander_process and self.remote_commander_process.poll() is None:
+            self.remote_commander_pid = self.remote_commander_process.pid
+            self.remote_commander_status.set(f"Running (PID {self.remote_commander_pid})")
+            return
+        try:
+            existing_pid = _remote_commander_pid()
+            if existing_pid is not None:
+                self.remote_commander_pid = existing_pid
+                self.remote_commander_status.set(f"Already running (PID {existing_pid})")
+                return
+            npx = shutil.which("npx.cmd") or shutil.which("npx")
+            if not npx:
+                raise RuntimeError("npx was not found. Install Node.js or add npx to PATH.")
+            APP_DATA.mkdir(parents=True, exist_ok=True)
+            self.remote_commander_log = (APP_DATA / "remote-desktop-commander.log").open("a", encoding="utf-8")
+            arguments = ["-y", f"{REMOTE_COMMANDER_PACKAGE}@latest", "remote"]
+            if npx.lower().endswith((".cmd", ".bat")) and os.name == "nt":
+                command = f'call {subprocess.list2cmdline([npx])} {subprocess.list2cmdline(arguments)}'
+                process = subprocess.Popen(
+                    command, cwd=str(Path.home()), env=os.environ.copy(), shell=True,
+                    stdin=subprocess.DEVNULL, stdout=self.remote_commander_log,
+                    stderr=subprocess.STDOUT,
+                    creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
+                )
+            else:
+                process = subprocess.Popen(
+                    [npx, *arguments], cwd=str(Path.home()), env=os.environ.copy(),
+                    stdin=subprocess.DEVNULL, stdout=self.remote_commander_log,
+                    stderr=subprocess.STDOUT,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+                )
+            self.remote_commander_process = process
+            self.remote_commander_pid = process.pid
+            self.remote_commander_status.set(f"Starting (PID {process.pid}); log: {APP_DATA / 'remote-desktop-commander.log'}")
+        except Exception as error:
+            if self.remote_commander_log is not None:
+                self.remote_commander_log.close()
+                self.remote_commander_log = None
+            self.remote_commander_status.set(f"Could not start: {error}")
+            if manual:
+                messagebox.showerror("Remote Desktop Commander", f"Could not start Remote Desktop Commander:\n{error}")
 
     def _values(self) -> dict[str, str]:
         return {**_defaults(), **_read_env(), "MYCOMP_OWNER_CONSENT_TOKEN": self.owner_consent_token, "MYCOMP_PUBLIC_BASE_URL": self.domain.get().strip(), "MYCOMP_OAUTH_REDIRECT_URIS": self.callback.get().strip(), "MYCOMP_ALLOWED_ROOTS": self.roots.get().strip(), "MYCOMP_PERMISSION_LEVEL": self.level.get(), "MYCOMP_UI_CAPABILITY": "windows_ui"}
@@ -452,6 +751,7 @@ class MyCompBot(tk.Tk):
 
     def _engine_env(self) -> dict[str, str]:
         values = self._values()
+        values["MYCOMP_AUTH_MODE"] = "oauth"
         if self.temporary_url:
             values["MYCOMP_PUBLIC_BASE_URL"] = self.temporary_url
         return {**os.environ, **values, "PYTHONPATH": str(ROOT / "src"), "MYCOMP_DATA_DIR": str(APP_DATA), "MYCOMP_CONFIG_DIR": str(APP_DATA), "MYCOMP_CAPABILITY_DIR": str(APP_DATA / "capabilities"), "MYCOMP_MAINTAINED_CAPABILITIES_DIR": str(ROOT / "capability_sources"), "MYCOMP_UI_CAPABILITY": "windows_ui"}
@@ -468,7 +768,11 @@ class MyCompBot(tk.Tk):
 
     def _stop(self) -> None:
         if self.process and self.process.poll() is None:
-            self.process.terminate()
+            if os.name == "nt":
+                subprocess.run(["taskkill.exe", "/PID", str(self.process.pid), "/T", "/F"],
+                               capture_output=True, timeout=10, creationflags=subprocess.CREATE_NO_WINDOW)
+            else:
+                self.process.terminate()
             try: self.process.wait(timeout=5)
             except subprocess.TimeoutExpired: self.process.kill()
         self.process = None; self.status.set("Stopped")
@@ -519,6 +823,12 @@ class MyCompBot(tk.Tk):
                 self._stop(); self._start()
 
     def _poll(self) -> None:
+        self._process_update_events()
+        if self._closing:
+            return
+        if SHOW_WINDOW_REQUEST.exists():
+            SHOW_WINDOW_REQUEST.unlink(missing_ok=True)
+            self._show_from_tray()
         try:
             while True:
                 line = self.tunnel_queue.get_nowait()
@@ -542,11 +852,115 @@ class MyCompBot(tk.Tk):
                 healthy = response.status == 200
         except Exception:
             healthy = False
+        try:
+            while True:
+                manual, ok, detail = self.tailscale_queue.get_nowait()
+                self.tailscale_busy = False
+                if self.tray_icon is not None:
+                    self.tray_icon.title = f"MyComp Bot - {detail}"
+                if manual:
+                    (messagebox.showinfo if ok else messagebox.showerror)("Tailscale Funnel", detail)
+        except queue.Empty:
+            pass
+        if self.tailscale_autofix and time.monotonic() >= self.next_tailscale_check:
+            self.next_tailscale_check = time.monotonic() + TAILSCALE_AUTOFIX_INTERVAL
+            self._request_tailscale_check(manual=False)
         if self.process and self.process.poll() is not None:
             self.status.set("Engine stopped unexpectedly")
         elif healthy:
             self.status.set("Running on 127.0.0.1:8645")
+        if self.remote_commander_process is not None:
+            exit_code = self.remote_commander_process.poll()
+            if exit_code is None:
+                status = f"Running (PID {self.remote_commander_process.pid})"
+                self.remote_commander_pid = self.remote_commander_process.pid
+            else:
+                status = f"Stopped (exit {exit_code}); see remote-desktop-commander.log"
+                self.remote_commander_process = None
+                self.remote_commander_pid = None
+                if self.remote_commander_log is not None:
+                    self.remote_commander_log.close()
+                    self.remote_commander_log = None
+            if self.remote_commander_status.get() != status:
+                self.remote_commander_status.set(status)
         self.after(200, self._poll)
+
+    def _request_tailscale_check(self, manual: bool) -> None:
+        if self.tailscale_busy:
+            if manual:
+                messagebox.showinfo("Tailscale Funnel", "A Tailscale check is already running.")
+            return
+        try:
+            _configure_tailscale_endpoint(self.domain.get().strip())
+        except ValueError as error:
+            if manual:
+                messagebox.showerror("Tailscale Funnel", str(error))
+            return
+        self.tailscale_busy = True
+        threading.Thread(target=self._check_tailscale, args=(manual,), daemon=True).start()
+
+    def _check_tailscale(self, manual: bool) -> None:
+        try:
+            with urllib.request.urlopen(LOCAL_HEALTH, timeout=5) as response:
+                local = json.load(response)
+            if response.status != 200 or local.get("status") != "ok":
+                raise RuntimeError("MyComp local service is not healthy; Funnel was left unchanged.")
+
+            status_result = subprocess.run(
+                [_tailscale_command(), "funnel", "status", "--json"],
+                capture_output=True, text=True, timeout=15,
+                creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
+            )
+            try:
+                funnel_status = json.loads(status_result.stdout) if status_result.returncode == 0 else {}
+            except json.JSONDecodeError:
+                funnel_status = {}
+            route_ok = _funnel_route_is_mycomp(funnel_status)
+
+            try:
+                public_ip = _probe_public_funnel()
+                public_ok = True
+            except Exception as error:
+                public_ip, public_ok = "", False
+                public_error = str(error)
+
+            should_repair = not route_ok or (not public_ok and (manual or self.tailscale_public_failures >= 1))
+            if public_ok:
+                self.tailscale_public_failures = 0
+            elif not route_ok or manual or self.tailscale_public_failures >= 1:
+                self.tailscale_public_failures += 1
+            else:
+                self.tailscale_public_failures += 1
+                self.tailscale_queue.put((manual, False, f"Public health check failed once; will retry in {TAILSCALE_AUTOFIX_INTERVAL}s before repairing. {public_error}"))
+                return
+
+            if should_repair:
+                _repair_mycomp_funnel()
+                verify = subprocess.run(
+                    [_tailscale_command(), "funnel", "status", "--json"],
+                    capture_output=True, text=True, timeout=15,
+                    creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
+                )
+                if verify.returncode or not _funnel_route_is_mycomp(json.loads(verify.stdout)):
+                    raise RuntimeError("Tailscale command finished, but the /mycomp route is still missing or incorrect.")
+                public_ip = _probe_public_funnel()
+                self.tailscale_public_failures = 0
+                detail = f"MyComp Funnel repaired and verified (public IP {public_ip})."
+            else:
+                detail = f"MyComp Funnel is healthy (public IP {public_ip})."
+            self.tailscale_queue.put((manual, True, detail))
+        except Exception as error:
+            self.tailscale_queue.put((manual, False, str(error)))
+
+    def _toggle_tailscale_autofix(self) -> None:
+        self.tailscale_autofix = not self.tailscale_autofix
+        values = _read_env()
+        values["MYCOMP_TAILSCALE_AUTOFIX"] = "true" if self.tailscale_autofix else "false"
+        _write_env(values)
+        if self.tray_icon is not None:
+            self.tray_icon.update_menu()
+        if self.tailscale_autofix:
+            self.next_tailscale_check = time.monotonic()
 
     def _execute_ui(self, payload: dict[str, object]) -> dict[str, object]:
         action = str(payload.get("action")); x, y = payload.get("x"), payload.get("y")
@@ -634,6 +1048,11 @@ class MyCompBot(tk.Tk):
     def _setup_tray(self) -> None:
         menu = pystray.Menu(
             pystray.MenuItem("Open MyComp Bot", lambda icon, item: self.after(0, self._show_from_tray), default=True),
+            pystray.MenuItem("Update MyComp Bot", lambda icon, item: self.after(0, self._request_update)),
+            pystray.MenuItem("Repair Tailscale now", lambda icon, item: self.after(0, lambda: self._request_tailscale_check(manual=True))),
+            pystray.MenuItem("AutoFix Tailscale", lambda icon, item: self.after(0, self._toggle_tailscale_autofix), checked=lambda item: self.tailscale_autofix),
+            pystray.MenuItem("Start Remote Desktop Commander now", lambda icon, item: self.after(0, lambda: self._start_remote_commander(manual=True))),
+            pystray.MenuItem("Start Remote Desktop Commander automatically", lambda icon, item: self.after(0, lambda: self._toggle_remote_commander_autostart(not self.remote_commander_autostart_enabled)), checked=lambda item: self.remote_commander_autostart_enabled),
             pystray.MenuItem("Report Error on GitHub", lambda icon, item: webbrowser.open(ISSUE_URL)),
             pystray.MenuItem("Exit", lambda icon, item: self.after(0, self._quit)),
         )
@@ -648,8 +1067,16 @@ class MyCompBot(tk.Tk):
         self.lift()
         self.focus_force()
     def _quit(self) -> None:
-        self._stop_tunnel(); self._stop(); self.destroy()
+        self._closing = True
+        if self.tray_icon is not None:
+            self.tray_icon.stop()
+            self.tray_icon = None
+        self._stop_tunnel()
+        self._stop()
+        self.quit()
+        self.destroy()
 
 
 if __name__ == "__main__":
-    MyCompBot().mainloop()
+    if _claim_single_instance():
+        MyCompBot().mainloop()

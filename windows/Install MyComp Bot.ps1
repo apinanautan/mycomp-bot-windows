@@ -115,7 +115,6 @@ if ($LASTEXITCODE -ne 0) { throw 'MyComp Bot installation failed.' }
 $configDir = Join-Path $env:LOCALAPPDATA 'MyComp Bot'
 $configPath = Join-Path $configDir '.env'
 New-Item -ItemType Directory -Force -Path $configDir | Out-Null
-Set-EnvValue $configPath 'MYCOMP_PUBLIC_BASE_URL' $baseUrl
 Set-EnvValue $configPath 'MYCOMP_AUTH_MODE' 'oauth' -OnlyIfMissing
 $allowedRoots = @('Documents', 'Desktop', 'Downloads') | ForEach-Object { Join-Path $env:USERPROFILE $_ }
 Set-EnvValue $configPath 'MYCOMP_ALLOWED_ROOTS' ($allowedRoots -join ',') -OnlyIfMissing
@@ -126,17 +125,20 @@ Set-EnvValue $configPath 'MYCOMP_SHELL_PATH' 'C:\Windows\System32;C:\Windows;C:\
 $funnel = (& $tailscale funnel status --json 2>$null | ConvertFrom-Json)
 $funnelKey = "${dnsName}:443"
 $existing = if ($funnel -and $funnel.Web) { $funnel.Web.PSObject.Properties[$funnelKey] } else { $null }
+$useTailscale = $true
 if ($existing) {
     $rootHandler = $existing.Value.Handlers.PSObject.Properties['/']
     $proxy = if ($rootHandler) { [string]$rootHandler.Value.Proxy } else { '' }
     if ($proxy -and $proxy -ne $target) {
-        throw "Tailscale Funnel port 443 already proxies to $proxy. It was not overwritten."
+        $useTailscale = $false
+        Write-Warning "Tailscale Funnel port 443 already belongs to another app ($proxy). MyComp Bot will not overwrite it; use the generated Free Temporary Tunnel URL instead."
     }
 }
-if (-not $existing) {
+if ($useTailscale -and -not $existing) {
     & $tailscale funnel --bg --yes --https=443 $target
     if ($LASTEXITCODE -ne 0) { throw 'Tailscale Funnel could not be enabled. Confirm Funnel is allowed for this tailnet.' }
 }
+if ($useTailscale) { Set-EnvValue $configPath 'MYCOMP_PUBLIC_BASE_URL' $baseUrl }
 
 $app = Join-Path $PSScriptRoot 'MyCompBot.py'
 $hostOutputLog = Join-Path $configDir 'host-output.log'

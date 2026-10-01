@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 title Install MyComp Bot
 
-set "REPO_ZIP=https://github.com/apinanautan/mycomp-bot-windows/archive/refs/heads/main.zip"
+set "RELEASE_API=https://api.github.com/repos/apinanautan/mycomp-bot-windows/releases/latest"
 set "DEST=%LOCALAPPDATA%\MyComp Bot Source"
 set "LOCAL_INSTALLER=%~dp0windows\Install MyComp Bot.ps1"
 set "INSTALL_ARGS="
@@ -10,7 +10,7 @@ if /i "%~1"=="--plan" set "INSTALL_ARGS=-PlanOnly"
 
 if exist "%LOCAL_INSTALLER%" goto run_installer
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $zip=Join-Path $env:TEMP ('mycomp-bot-'+[guid]::NewGuid().ToString('N')+'.zip'); $unpack=$zip+'.d'; try { Invoke-WebRequest -UseBasicParsing $env:REPO_ZIP -OutFile $zip; Expand-Archive -LiteralPath $zip -DestinationPath $unpack; $source=Join-Path $unpack 'mycomp-bot-windows-main'; $null=New-Item -ItemType Directory -Force -Path $env:DEST; Copy-Item -Path (Join-Path $source '*') -Destination $env:DEST -Recurse -Force } finally { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath $unpack -Recurse -Force -ErrorAction SilentlyContinue }"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $zip=Join-Path $env:TEMP ('mycomp-bot-'+[guid]::NewGuid().ToString('N')+'.zip'); $unpack=$zip+'.d'; try { $release=Invoke-RestMethod -Uri $env:RELEASE_API -Headers @{'User-Agent'='MyComp-Bot-Installer'}; Invoke-WebRequest -UseBasicParsing $release.zipball_url -OutFile $zip; Expand-Archive -LiteralPath $zip -DestinationPath $unpack; $source=Get-ChildItem -LiteralPath $unpack -Directory | Select-Object -First 1; if(-not $source){throw 'Release archive contains no source directory'}; $null=New-Item -ItemType Directory -Force -Path $env:DEST; Copy-Item -Path (Join-Path $source.FullName '*') -Destination $env:DEST -Recurse -Force } finally { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue; if(Test-Path $unpack){$resolved=[IO.Path]::GetFullPath($unpack); if(-not $resolved.StartsWith([IO.Path]::GetFullPath($env:TEMP)+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){throw 'Unsafe temporary extraction path'}; Remove-Item -LiteralPath $resolved -Recurse -Force -ErrorAction SilentlyContinue} }"
 if errorlevel 1 goto download_failed
 set "LOCAL_INSTALLER=%DEST%\windows\Install MyComp Bot.ps1"
 

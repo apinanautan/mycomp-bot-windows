@@ -22,3 +22,5 @@ oauth-state/
 *.pre-*
 test-results.txt
 wheel-downloads/
+# Local agent working notes
+STATE.md
