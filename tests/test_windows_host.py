@@ -1,4 +1,5 @@
 import os
+import queue
 import subprocess
 import unittest
 from unittest.mock import MagicMock, patch
@@ -112,6 +113,36 @@ class WindowsHostTests(unittest.TestCase):
             self.assertTrue(instance.tailscale_autofix)
             self.assertEqual(write.call_args.args[0]["MYCOMP_TAILSCALE_AUTOFIX"], "true")
 
+    def test_public_tls_failure_rebinds_after_route_repair_and_obeys_cooldown(self):
+        from windows import MyCompBot as app
+        instance = app.MyCompBot.__new__(app.MyCompBot)
+        instance.tailscale_queue = queue.Queue()
+        instance.tailscale_public_failures = 1
+        instance.next_tailscale_rebind = 0
+        response = MagicMock(status=200)
+        response.__enter__.return_value = response
+        result = MagicMock(returncode=0, stdout='{}')
+        with patch.object(app.urllib.request, 'urlopen', return_value=response), \
+             patch.object(app.json, 'load', return_value={'status': 'ok'}), \
+             patch.object(app, '_funnel_route_is_mycomp', return_value=True), \
+             patch.object(app, '_repair_mycomp_funnel') as repair, \
+             patch.object(app, '_probe_public_funnel', side_effect=[RuntimeError('TLS'), RuntimeError('TLS'), '203.0.113.1']) as probe, \
+             patch.object(app.subprocess, 'run', return_value=result) as run, \
+             patch.object(app.time, 'sleep'), patch.object(app.time, 'monotonic', return_value=100):
+            instance._check_tailscale(manual=False)
+            self.assertTrue(instance.tailscale_queue.get_nowait()[1])
+            repair.assert_called_once()
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertEqual(sum(command[1:] == ['debug', 'rebind'] for command in commands), 1)
+            self.assertEqual(instance.next_tailscale_rebind, 400)
+            probe.side_effect = [RuntimeError('TLS'), RuntimeError('TLS')]
+            instance._check_tailscale(manual=True)
+            _, ok, detail = instance.tailscale_queue.get_nowait()
+            self.assertFalse(ok)
+            self.assertIn('cooling down', detail)
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertEqual(sum(command[1:] == ['debug', 'rebind'] for command in commands), 1)
+            self.assertFalse(any('reset' in command or 'down' in command for command in commands))
     def test_remote_commander_autostart_toggle_persists_without_overwriting_settings(self):
         from windows import MyCompBot as app
 

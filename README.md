@@ -4,6 +4,10 @@ MyComp Bot คือ MCP server ที่รันบนเครื่อง Wi
 
 คู่มือนี้ตั้งใจให้เปิดแล้วทำงานต่อได้ แม้เป็นเครื่องใหม่หรือเปิดแชต Codex/ChatGPT หน้าต่างใหม่
 
+### ตรวจและซ่อมการเชื่อมต่ออัตโนมัติ
+
+AutoFix ตรวจ Funnel ทุก 60 วินาทีผ่าน IP สาธารณะจริง หน้าต่างจะแสดงสถานะ **Public connection** แยกจาก Local service และมีปุ่ม **Repair Tailscale now** หากซ่อม route แล้วยังเชื่อมต่อไม่ได้ โปรแกรมจะลองรีเฟรช transport ด้วย `tailscale debug rebind` ไม่เกินหนึ่งครั้งต่อ 5 นาที โดยไม่ reset mapping ของแอพอื่น คำสั่ง debug นี้อาจเปลี่ยนใน Tailscale รุ่นถัดไป; ถ้าคำสั่งไม่รองรับหรือยังล้ม โปรแกรมจะแสดง FAILED และเก็บรายละเอียดที่ `%LOCALAPPDATA%\MyComp Bot\tailscale-autofix.log` แทนการรายงานว่าซ่อมสำเร็จ
+
 > อย่าใส่ token, OAuth callback, owner consent code, log ทั้งก้อน หรือชื่อเครื่องจริงลงใน GitHub Issue สาธารณะ
 
 ## ลิงก์สำคัญ

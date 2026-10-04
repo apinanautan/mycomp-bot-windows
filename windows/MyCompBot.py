@@ -3,6 +3,8 @@
 import ctypes
 import ipaddress
 import json
+import logging
+from logging.handlers import RotatingFileHandler
 import os
 import queue
 import secrets
@@ -46,6 +48,7 @@ TAILSCALE_HTTPS_PORT = 443
 TAILSCALE_PATH = "/"
 TAILSCALE_PUBLIC_HEALTH = ""
 TAILSCALE_AUTOFIX_INTERVAL = 60
+TAILSCALE_REBIND_COOLDOWN = 300
 REMOTE_COMMANDER_PACKAGE = "@wonderwhy-er/desktop-commander"
 UI_AUTOMATION_HELPER = Path(__file__).resolve().with_name("UIAutomationBridge.ps1")
 AUTOSTART_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -172,7 +175,7 @@ def _probe_public_funnel() -> str:
     for address in _public_funnel_ips():
         try:
             result = subprocess.run(
-                [curl, "--silent", "--show-error", "--max-time", "12", "--resolve",
+                [curl, "--silent", "--show-error", "--fail", "--max-time", "12", "--resolve",
                  f"{TAILSCALE_HOST}:{TAILSCALE_HTTPS_PORT}:{address}", TAILSCALE_PUBLIC_HEALTH],
                 capture_output=True, text=True, timeout=15,
                 creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
@@ -533,7 +536,7 @@ class MyCompBot(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("MyComp Bot for Windows")
-        self.minsize(760, 740)
+        self.minsize(760, 780)
         self.process: subprocess.Popen[str] | None = None
         self.tunnel: subprocess.Popen[str] | None = None
         self.tray_icon: pystray.Icon | None = None
@@ -541,8 +544,18 @@ class MyCompBot(tk.Tk):
         self.tailscale_queue: queue.Queue[tuple[bool, bool, str]] = queue.Queue()
         self.tailscale_autofix = _read_env().get("MYCOMP_TAILSCALE_AUTOFIX", "true").lower() in {"1", "true", "yes", "on"}
         self.tailscale_busy = False
+        self.next_tailscale_rebind = 0.0
+        self.tailscale_status = tk.StringVar(value="Public connection: checking...")
+        logger = logging.getLogger("mycomp.tailscale")
+        if not logger.handlers:
+            APP_DATA.mkdir(parents=True, exist_ok=True)
+            handler = RotatingFileHandler(APP_DATA / "tailscale-autofix.log", maxBytes=1_000_000, backupCount=2, encoding="utf-8")
+            handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+            logger.addHandler(handler)
+            logger.setLevel(logging.INFO)
+            logger.propagate = False
         self.tailscale_public_failures = 0
-        self.next_tailscale_check = time.monotonic() + TAILSCALE_AUTOFIX_INTERVAL
+        self.next_tailscale_check = time.monotonic()
         self.remote_commander_process: subprocess.Popen[str] | None = None
         self.remote_commander_log = None
         self.remote_commander_autostart = tk.BooleanVar(value=True)
@@ -615,8 +628,10 @@ class MyCompBot(tk.Tk):
         ttk.Button(frame, text="Start Remote Desktop Commander now", command=lambda: self._start_remote_commander(manual=True)).grid(row=15, column=1, sticky="w", pady=(6, 0))
 
         ttk.Button(frame, text="Update MyComp Bot", command=self._request_update).grid(row=16, column=1, sticky="w", pady=(10, 0))
+        ttk.Button(frame, text="Repair Tailscale now", command=lambda: self._request_tailscale_check(manual=True)).grid(row=16, column=2, sticky="e", pady=(10, 0))
         ttk.Label(frame, textvariable=self.update_status, wraplength=600).grid(row=17, column=0, columnspan=3, sticky="w", pady=(6, 0))
         ttk.Label(frame, text="Mouse/keyboard actions require Elevated. Accessibility uses Windows UI Automation; screen capture uses native Win32 capture. OCR uses RapidOCR with ONNX Runtime. Tailscale provides the public HTTPS connection.", wraplength=700).grid(row=18, column=0, columnspan=3, sticky="w", pady=(12, 0))
+        ttk.Label(frame, textvariable=self.tailscale_status, wraplength=700).grid(row=19, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
     def _request_update(self) -> None:
         if self.update_busy:
@@ -856,6 +871,8 @@ class MyCompBot(tk.Tk):
             while True:
                 manual, ok, detail = self.tailscale_queue.get_nowait()
                 self.tailscale_busy = False
+                self.tailscale_status.set(("Public connection OK: " if ok else "Public connection FAILED: ") + detail)
+                logging.getLogger("mycomp.tailscale").info("%s %s", "OK" if ok else "FAILED", detail)
                 if self.tray_icon is not None:
                     self.tray_icon.title = f"MyComp Bot - {detail}"
                 if manual:
@@ -924,6 +941,8 @@ class MyCompBot(tk.Tk):
                 public_ip, public_ok = "", False
                 public_error = str(error)
 
+            if route_ok and not public_ok and time.monotonic() < self.next_tailscale_rebind:
+                raise RuntimeError("Public Funnel is unavailable; transport recovery is cooling down. Route was left unchanged. See tailscale-autofix.log.")
             should_repair = not route_ok or (not public_ok and (manual or self.tailscale_public_failures >= 1))
             if public_ok:
                 self.tailscale_public_failures = 0
@@ -943,7 +962,32 @@ class MyCompBot(tk.Tk):
                 )
                 if verify.returncode or not _funnel_route_is_mycomp(json.loads(verify.stdout)):
                     raise RuntimeError("Tailscale command finished, but the /mycomp route is still missing or incorrect.")
-                public_ip = _probe_public_funnel()
+                try:
+                    public_ip = _probe_public_funnel()
+                except Exception:
+                    # Route repair cannot recover a stale Tailscale transport.
+                    # Rebind preserves mappings and preferences; never reset/down
+                    # other apps in the unattended heartbeat.
+                    now = time.monotonic()
+                    if now < self.next_tailscale_rebind:
+                        raise RuntimeError("Public Funnel still fails after route repair; transport recovery is cooling down. See tailscale-autofix.log.")
+                    self.next_tailscale_rebind = now + TAILSCALE_REBIND_COOLDOWN
+                    logging.getLogger("mycomp.tailscale").warning("Public probe failed after route repair; rebinding Tailscale transport")
+                    rebound = subprocess.run(
+                        [_tailscale_command(), "debug", "rebind"], capture_output=True,
+                        text=True, timeout=15,
+                        creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
+                    )
+                    if rebound.returncode:
+                        raise RuntimeError("Tailscale transport recovery failed: " + (rebound.stderr.strip() or rebound.stdout.strip()))
+                    for attempt in range(3):
+                        time.sleep(2)
+                        try:
+                            public_ip = _probe_public_funnel()
+                            break
+                        except Exception:
+                            if attempt == 2:
+                                raise
                 self.tailscale_public_failures = 0
                 detail = f"MyComp Funnel repaired and verified (public IP {public_ip})."
             else:
