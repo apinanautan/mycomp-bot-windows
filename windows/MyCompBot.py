@@ -26,7 +26,7 @@ from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 
 import pystray
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageTk
 
 if __package__:
     from . import app_update
@@ -662,7 +662,14 @@ class MyCompBot(tk.Tk):
         if APP_ICON_ICO.is_file():
             self.iconbitmap(default=str(APP_ICON_ICO))
         if APP_ICON_PNG.is_file():
-            self._window_icon = tk.PhotoImage(file=str(APP_ICON_PNG))
+            # Use the dedicated 32px icon from the multi-resolution ICO
+            # for the tiny Windows title bar / taskbar instead of scaling
+            # the full 1024px artwork down at runtime.
+            with Image.open(APP_ICON_ICO if APP_ICON_ICO.is_file() else APP_ICON_PNG) as source:
+                if hasattr(source, "ico") and (32, 32) in source.ico.sizes():
+                    source = source.ico.getimage((32, 32))
+                source = source.convert("RGBA").resize((32, 32), Image.Resampling.LANCZOS)
+                self._window_icon = ImageTk.PhotoImage(source)
             self.iconphoto(True, self._window_icon)
         _refresh_existing_shortcut_icons()
         if __package__:
