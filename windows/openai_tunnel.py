@@ -10,6 +10,9 @@ import time
 import urllib.request
 
 
+LOCAL_MCP_ENDPOINT = "http://127.0.0.1:8645/mcp"
+
+
 class Blob(ctypes.Structure):
     _fields_ = [("size", wintypes.DWORD), ("data", ctypes.POINTER(ctypes.c_char))]
 
@@ -33,9 +36,14 @@ def protect(data: bytes, decrypt: bool = False) -> bytes:
         kernel.LocalFree(target.data)
 
 
+def validate_tunnel_id(tunnel_id: str) -> str:
+    if not isinstance(tunnel_id, str) or not re.fullmatch(r"tunnel_[a-f0-9]{32}", tunnel_id):
+        raise ValueError("Save a valid Tunnel ID first (tunnel_ and 32 hexadecimal characters).")
+    return tunnel_id
+
+
 def validate(tunnel_id: str, key: str) -> None:
-    if not re.fullmatch(r"tunnel_[a-f0-9]{32}", tunnel_id):
-        raise ValueError("Tunnel ID must be tunnel_ followed by 32 hexadecimal characters.")
+    validate_tunnel_id(tunnel_id)
     if not re.fullmatch(r"sk-[A-Za-z0-9_-]{20,}", key):
         raise ValueError("Enter a valid OpenAI runtime API key with Tunnels Read/Use.")
 
@@ -58,6 +66,35 @@ class Tunnel:
             return json.loads(self.settings.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return {}
+
+    @property
+    def mcp_endpoint(self) -> str:
+        """The exact local binding passed to the Tunnel runtime."""
+        return LOCAL_MCP_ENDPOINT
+
+    def plugin_prompt(self) -> str:
+        """Build from saved non-secret settings only; never inspect key.dpapi or .env."""
+        saved = self.load()
+        tunnel_id = validate_tunnel_id(saved.get("tunnel_id"))
+        endpoint = self.mcp_endpoint
+        return (
+            "สร้างปลั๊กอิน MyComp Bot ผ่าน OpenAI Secure MCP Tunnel สำหรับเครื่องนี้ โดยตรวจสอบความรองรับจริงก่อนดำเนินการ\\n\\n"
+            f"Tunnel ID ที่บันทึกไว้: {tunnel_id}\\n"
+            f"Local MCP binding ของ runtime เครื่องนี้: {endpoint}\\n\\n"
+            "localhost / 127.0.0.1 คือปลายทางภายในเครื่อง Windows นี้เท่านั้น "
+            "ไม่ใช่ public URL ที่ ChatGPT Cloud สามารถเรียกได้โดยตรง\\n"
+            "ตรวจสอบว่า OpenAI Secure MCP Tunnel และการผูกปลั๊กอินกับ Tunnel ID นี้รองรับจริงหรือไม่ "
+            "ห้ามคาดเดาหรือแต่ง connector URL หรือ tunnel URL เอง\\n"
+            "หากรองรับ ให้เชื่อมผ่านช่องทาง Tunnel ที่ได้รับการยืนยัน จากนั้นเรียก tools/list "
+            "เพื่อค้นหาเครื่องมือที่ให้บริการจริง และทดสอบเรียกเครื่องมืออ่านสถานะที่ปลอดภัย "
+            "โดยไม่แก้ไขข้อมูลบนเครื่อง\\n"
+            "รักษา OAuth/authentication และสิทธิ์เดิมของ MyComp Bot "
+            "ห้ามขยาย permission, ปิด authentication หรือขอ API key/token/ไฟล์ .env ในพรอมต์นี้\\n"
+            "Runtime ready เป็นเพียงสถานะของ Tunnel runtime ไม่ใช่หลักฐานว่า ChatGPT "
+            "เรียกใช้เครื่องมือผ่าน Tunnel สำเร็จ ต้องยืนยันผล tools/list และการเรียกอ่านสถานะจริง\\n"
+            "หากปลั๊กอินหรือการเชื่อมต่อผ่าน Secure MCP Tunnel ยังไม่รองรับ "
+            "ให้ระบุข้อจำกัดตามจริง ไม่สร้างปลั๊กอินหลอกหรืออ้างว่าเชื่อมต่อสำเร็จ"
+        ).replace("\\n", "\n")
 
     def save(self, tunnel_id: str, key: str, enabled: bool):
         tunnel_id, key = tunnel_id.strip(), key.strip()
@@ -92,7 +129,7 @@ class Tunnel:
             self.process = subprocess.Popen([str(self.binary), "run",
                 "--control-plane.tunnel-id", config["tunnel_id"],
                 "--control-plane.api-key", "env:CONTROL_PLANE_API_KEY",
-                "--mcp.server-url", "http://127.0.0.1:8645/mcp",
+                "--mcp.server-url", self.mcp_endpoint,
                 "--health.listen-addr", "127.0.0.1:0",
                 "--health.url-file", str(self.health)],
                 env=environment, stdout=self.log, stderr=subprocess.STDOUT,

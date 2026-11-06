@@ -571,6 +571,39 @@ class WindowsUIAutomation:
 
 
 class MyCompBot(tk.Tk):
+    def _show_plugin_prompt(self, parent: tk.Toplevel) -> None:
+        try:
+            prompt = self.openai_tunnel.plugin_prompt()
+        except (ValueError, OSError, TypeError, KeyError):
+            messagebox.showwarning(
+                "OpenAI Tunnel",
+                "กรุณาบันทึก Tunnel ID ที่ถูกต้องในหน้า OpenAI Tunnel ก่อนสร้างพรอมต์",
+                parent=parent,
+            )
+            return
+        viewer = tk.Toplevel(parent)
+        viewer.title("พรอมต์สร้างปลั๊กอิน MyComp Bot")
+        viewer.geometry("820x570")
+        viewer.columnconfigure(0, weight=1)
+        viewer.rowconfigure(0, weight=1)
+        text = tk.Text(viewer, wrap="word", font=("Segoe UI", 11))
+        text.grid(row=0, column=0, padx=12, pady=12, sticky="nsew")
+        scrollbar = ttk.Scrollbar(viewer, orient="vertical", command=text.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns", pady=12)
+        text.configure(yscrollcommand=scrollbar.set)
+        text.insert("1.0", prompt)
+        text.configure(state="disabled")
+
+        def copy_prompt() -> None:
+            viewer.clipboard_clear()
+            viewer.clipboard_append(prompt)
+            viewer.update_idletasks()
+            messagebox.showinfo("MyComp Bot", "คัดลอกพรอมต์แล้ว", parent=viewer)
+
+        ttk.Button(viewer, text="คัดลอกพรอมต์", command=copy_prompt).grid(
+            row=1, column=0, padx=12, pady=(0, 12), sticky="e"
+        )
+
     def _openai_tunnel_settings(self):
         window = tk.Toplevel(self)
         window.title("OpenAI Tunnel")
@@ -594,8 +627,11 @@ class MyCompBot(tk.Tk):
                 messagebox.showerror("OpenAI Tunnel", "Could not save or start. Check Tunnel ID, API key, and installed tunnel-client.exe.", parent=window)
         ttk.Button(window, text="Save and connect", command=save).grid(row=3, column=0, padx=12, pady=8)
         ttk.Button(window, text="Test readiness", command=lambda: status.set(self.openai_tunnel.status())).grid(row=3, column=1, padx=12, pady=8)
-        ttk.Label(window, textvariable=status, wraplength=650).grid(row=4, column=0, columnspan=2, padx=12, pady=8)
-        ttk.Label(window, text="Key is encrypted for this Windows user. Each new machine needs its own setup.", wraplength=650).grid(row=5, column=0, columnspan=2, padx=12, pady=8)
+        ttk.Button(window, text="พรอมต์สร้างปลั๊กอิน", command=lambda: self._show_plugin_prompt(window)).grid(
+            row=4, column=0, columnspan=2, padx=12, pady=8
+        )
+        ttk.Label(window, textvariable=status, wraplength=650).grid(row=5, column=0, columnspan=2, padx=12, pady=8)
+        ttk.Label(window, text="Key is encrypted for this Windows user. Each new machine needs its own setup.", wraplength=650).grid(row=6, column=0, columnspan=2, padx=12, pady=8)
 
     def _openai_tunnel_tick(self):
         if not self._closing:

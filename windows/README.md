@@ -11,6 +11,19 @@ PowerShell -ExecutionPolicy Bypass -File '.\windows\Run MyComp Bot.ps1'
 โปรดอย่า commit `.env`, OAuth token/callback, owner consent code, logs, `.venv` หรือ build output
 
 ตั้งแต่รุ่น 1.1.4 กด **Update MyComp Bot** ในหน้าต่างหรือเมนู tray เพื่ออัปเดตจาก GitHub Release ได้ โปรแกรมจะติดตั้งแล้วเปิดกลับเอง และเก็บการตั้งค่าเดิมไว้ รายละเอียดการอัปเดตอยู่ใน `%LOCALAPPDATA%\MyComp Bot\update.log`.
+## Release 1.1.8: Secure MCP Tunnel plugin prompt
+
+Open the **OpenAI Tunnel** settings window from the application menu or
+**Tunnel / API key** in the system tray. Choose **พรอมต์สร้างปลั๊กอิน** to
+see the generated instructions, then **คัดลอกพรอมต์** to copy them.
+The text uses only the Tunnel ID currently saved in local settings and the
+same local MCP endpoint passed to the Tunnel runtime; there is no fallback ID.
+Invalid or missing IDs are rejected. The prompt never reads or copies the
+API key, DPAPI secrets, tokens or .env. It warns ChatGPT that localhost is
+not a public address and that runtime readiness is not evidence of successful
+ChatGPT tool calls. Secure Tunnel plugin support must be verified before
+claiming connectivity; no connector URL is invented.
+
 ## Release 1.1.7: tray and single-flight tools
 
 MyComp Bot now starts **hidden in the Windows system tray**, keeping the
