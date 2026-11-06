@@ -97,7 +97,11 @@ class Tunnel:
         tailscale_endpoint = urlunsplit(("https", url.netloc, url.path.rstrip("/") + "/mcp", "", ""))
         endpoint = self.mcp_endpoint
         return (
-            f"ชื่อปลั๊กอินที่ผู้ใช้เลือก: {name}\\n"
+            f"ชื่อหลักที่ผู้ใช้กำหนดเอง: {name}\\n"
+            f"ชื่อปลั๊กอินช่องทาง Tailscale: {name} Tailscale\\n"
+            f"ชื่อปลั๊กอินช่องทาง Tunnel: {name} Tunnel\\n"
+            "ต้องใช้ชื่อทั้งสองรายการตามนี้เท่านั้น โดยเติมคำท้าย Tailscale และ Tunnel "
+            "โดยอัตโนมัติจากชื่อหลักที่ผู้ใช้กรอก ห้ามใช้ชื่อจากตัวอย่างหรือเปลี่ยนชื่อเอง\\n"
             "สร้างปลั๊กอินสำหรับ MyComp Bot ที่รองรับการเชื่อมต่อ 2 ช่องทาง "
             "คือ Tailscale และ OpenAI Secure MCP Tunnel โดยตรวจสอบว่าระบบปลั๊กอินรองรับจริงก่อนดำเนินการ\\n\\n"
             f"ช่องทาง Tailscale HTTPS MCP: {tailscale_endpoint}\\n"
@@ -109,8 +113,8 @@ class Tunnel:
             "ห้ามสรุปว่า URL .ts.net เข้าถึงจากคลาวด์ได้เพียงเพราะเป็น HTTPS\\n"
             "ตรวจสอบการรองรับ Secure MCP Tunnel และรูปแบบการผูก Tunnel ID อย่างเป็นทางการ "
             "ห้ามเดา connector URL หรือสร้าง endpoint ปลอม\\n"
-            f"ขั้นที่ 1: สร้างปลั๊กอินสองรายการแยกกัน โดยใช้ชื่อ {name} (Tailscale) "
-            f"และ {name} (Tunnel) เพื่อเชื่อม MyComp Bot เครื่องเดียวกันจาก Tailscale HTTPS MCP "
+            f"ขั้นที่ 1: สร้างปลั๊กอินสองรายการแยกกัน โดยใช้ชื่อ {name} Tailscale "
+            f"และ {name} Tunnel เพื่อเชื่อม MyComp Bot เครื่องเดียวกันจาก Tailscale HTTPS MCP "
             "และ OpenAI Secure MCP Tunnel ตามลำดับ หากแพลตฟอร์มรองรับเส้นทางคู่ในปลั๊กอินเดียว "
             "จะเพิ่มตัวเลือก failover อย่างปลอดภัยก็ได้ แต่ต้องระบุชัดเจนว่าใช้งานจริงในรูปแบบใด\\n"
             "อย่าสร้างตัวเชื่อมต่อซ้ำโดยไม่มีเหตุผล และอย่าสร้างปลั๊กอินหรือ endpoint จำลอง\\n\\n"

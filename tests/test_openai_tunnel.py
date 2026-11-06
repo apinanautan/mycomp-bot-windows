@@ -118,8 +118,11 @@ class TunnelTests(unittest.TestCase):
                 "enabled": True,
             }), encoding="utf-8")
             prompt = tunnel.plugin_prompt("User Named Bot", "https://desktop.example.ts.net/mycomp")
-            self.assertIn("User Named Bot (Tailscale)", prompt)
-            self.assertIn("User Named Bot (Tunnel)", prompt)
+            self.assertIn("User Named Bot Tailscale", prompt)
+            self.assertIn("User Named Bot Tunnel", prompt)
+            self.assertIn("ชื่อปลั๊กอินช่องทาง Tailscale: User Named Bot Tailscale", prompt)
+            self.assertIn("ชื่อปลั๊กอินช่องทาง Tunnel: User Named Bot Tunnel", prompt)
+            self.assertNotIn("Dino", prompt)
             self.assertIn("https://github.com/vercel-labs/agent-desktop", prompt)
             self.assertIn("agent-desktop version", prompt)
             self.assertIn("agent-desktop status", prompt)

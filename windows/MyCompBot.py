@@ -622,14 +622,37 @@ class MyCompBot(tk.Tk):
         key = tk.StringVar()
         enabled = tk.BooleanVar(value=saved.get("enabled", False))
         status = tk.StringVar(value=self.openai_tunnel.status())
-        for row, (label, variable) in enumerate((("Tunnel ID", tunnel_id), ("API key (blank keeps saved key)", key))):
-            ttk.Label(window, text=label).grid(row=row, column=0, padx=12, pady=8, sticky="w")
-            ttk.Entry(window, textvariable=variable, width=60, show="*" if row else "").grid(row=row, column=1, padx=12, pady=8, sticky="ew")
+        ttk.Label(window, text="Tunnel ID").grid(row=0, column=0, padx=12, pady=8, sticky="w")
+        ttk.Entry(window, textvariable=tunnel_id, width=60).grid(row=0, column=1, padx=12, pady=8, sticky="ew")
+        ttk.Label(window, text="API key").grid(row=1, column=0, padx=12, pady=8, sticky="w")
+        key_area = ttk.Frame(window)
+        key_area.grid(row=1, column=1, padx=12, pady=8, sticky="ew")
+        key_area.columnconfigure(0, weight=1)
+        key_entry = ttk.Entry(key_area, textvariable=key, width=60, show="*")
+        key_entry.grid(row=0, column=0, sticky="ew")
+        # A visible green indicator, never the stored API key itself.
+        # Check only whether an encrypted credential file exists.
+        key_saved = self.openai_tunnel.secret.is_file()
+        saved_key_label = tk.Label(
+            key_area, text="✓ Saved API key", fg="#147d36", bg="white",
+            font=("Segoe UI", 9, "bold"), cursor="xterm",
+        )
+        def update_saved_key_indicator(*_):
+            if key_saved and not key.get():
+                saved_key_label.place(relx=0.02, rely=0.5, anchor="w")
+            else:
+                saved_key_label.place_forget()
+        key.trace_add("write", update_saved_key_indicator)
+        saved_key_label.bind("<Button-1>", lambda event: key_entry.focus_set())
+        update_saved_key_indicator()
         ttk.Checkbutton(window, text="Connect automatically while MyComp is running", variable=enabled).grid(row=2, column=0, columnspan=2, padx=12, pady=8)
         def save():
+            nonlocal key_saved
             try:
                 self.openai_tunnel.save(tunnel_id.get(), key.get(), enabled.get())
                 key.set("")
+                key_saved = self.openai_tunnel.secret.is_file()
+                update_saved_key_indicator()
                 self.openai_tunnel.tick()
                 status.set(self.openai_tunnel.status())
             except (OSError, ValueError, KeyError):
@@ -662,15 +685,19 @@ class MyCompBot(tk.Tk):
         if APP_ICON_ICO.is_file():
             self.iconbitmap(default=str(APP_ICON_ICO))
         if APP_ICON_PNG.is_file():
-            # Use the dedicated 32px icon from the multi-resolution ICO
-            # for the tiny Windows title bar / taskbar instead of scaling
-            # the full 1024px artwork down at runtime.
+            # Supply actual small icon frames rather than scaling a single 32px
+            # frame for both the title bar and taskbar. Retain references so
+            # Tk does not garbage-collect the Win32 icon images.
+            self._window_icons = []
             with Image.open(APP_ICON_ICO if APP_ICON_ICO.is_file() else APP_ICON_PNG) as source:
-                if hasattr(source, "ico") and (32, 32) in source.ico.sizes():
-                    source = source.ico.getimage((32, 32))
-                source = source.convert("RGBA").resize((32, 32), Image.Resampling.LANCZOS)
-                self._window_icon = ImageTk.PhotoImage(source)
-            self.iconphoto(True, self._window_icon)
+                sizes = getattr(getattr(source, "ico", None), "sizes", lambda: set())()
+                for size in (32, 16, 48, 64, 256):
+                    if (size, size) in sizes:
+                        icon = source.ico.getimage((size, size))
+                    else:
+                        icon = source.resize((size, size), Image.Resampling.LANCZOS)
+                    self._window_icons.append(ImageTk.PhotoImage(icon.convert("RGBA")))
+            self.iconphoto(True, *self._window_icons)
         _refresh_existing_shortcut_icons()
         if __package__:
             from .openai_tunnel import Tunnel
@@ -698,6 +725,10 @@ class MyCompBot(tk.Tk):
         self.tray_icon: pystray.Icon | None = None
         self.tunnel_queue: queue.Queue[str] = queue.Queue()
         self.tailscale_queue: queue.Queue[tuple[bool, bool, str]] = queue.Queue()
+        self.connection_check_queue: queue.Queue[tuple[int, str, str, str]] = queue.Queue()
+        self.connection_check_generation = 0
+        self.connection_indicators: dict[str, tk.Label] = {}
+        self.connection_checked_at = tk.StringVar(value="Check when window opens")
         self.tailscale_autofix = _read_env().get("MYCOMP_TAILSCALE_AUTOFIX", "true").lower() in {"1", "true", "yes", "on"}
         self.tailscale_busy = False
         self.next_tailscale_rebind = 0.0
@@ -761,11 +792,33 @@ class MyCompBot(tk.Tk):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
         container.columnconfigure(0, weight=1)
-        container.rowconfigure(0, weight=1)
+        container.rowconfigure(1, weight=1)
+        healthbar = ttk.Frame(container, style="MyComp.TFrame", padding=(16, 10))
+        healthbar.grid(row=0, column=0, columnspan=2, sticky="ew")
+        for column, (name, title) in enumerate(
+            (("tailscale", "Tailscale HTTPS"), ("tunnel", "OpenAI Tunnel"), ("desktop", "Remote Desktop"))
+        ):
+            healthbar.columnconfigure(column, weight=1)
+            ttk.Label(healthbar, text=title, style="MyComp.TLabel").grid(
+                row=0, column=column, sticky="w", padx=(0, 8)
+            )
+            indicator = tk.Label(
+                healthbar, text="● Not checked", anchor="w", fg="#64748b",
+                bg="#ffffff", font=("Segoe UI", 9), width=22,
+            )
+            indicator.grid(row=1, column=column, sticky="w", padx=(0, 8))
+            self.connection_indicators[name] = indicator
+        ttk.Button(
+            healthbar, text="Check now", command=self._refresh_connection_status,
+            style="MyComp.TButton",
+        ).grid(row=0, column=3, rowspan=2, sticky="e", padx=(4, 0))
+        ttk.Label(
+            healthbar, textvariable=self.connection_checked_at, style="MyComp.TLabel",
+        ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(5, 0))
         canvas = tk.Canvas(container, background="#ffffff", highlightthickness=0, borderwidth=0)
-        canvas.grid(row=0, column=0, sticky="nsew")
+        canvas.grid(row=1, column=0, sticky="nsew")
         scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
-        scrollbar.grid(row=0, column=1, sticky="ns")
+        scrollbar.grid(row=1, column=1, sticky="ns")
         canvas.configure(yscrollcommand=scrollbar.set)
         frame = ttk.Frame(canvas, padding=(22, 20), style="MyComp.TFrame")
         frame.columnconfigure(1, weight=1)
@@ -1030,8 +1083,89 @@ class MyCompBot(tk.Tk):
             if self.process and self.process.poll() is None:
                 self._stop(); self._start()
 
+    def _show_connection_result(self, name: str, level: str, description: str) -> None:
+        colors = {"green": "#15803d", "red": "#b91c1c", "amber": "#a16207", "pending": "#64748b"}
+        circle = "●" if level != "pending" else "◌"
+        label = self.connection_indicators.get(name)
+        if label is not None:
+            label.configure(text=f"{circle} {description}", foreground=colors.get(level, "#64748b"))
+
+    def _refresh_connection_status(self) -> None:
+        """One-shot checks on opening the full window; never on tray polling."""
+        if self._closing:
+            return
+        self.connection_check_generation += 1
+        generation = self.connection_check_generation
+        self.connection_checked_at.set("Checking connectivity (green = proven by probe)...")
+        for name in ("tailscale", "tunnel", "desktop"):
+            self._show_connection_result(name, "pending", "Checking...")
+        # Tk widgets must not be accessed from the worker thread.
+        public_url = self.domain.get().strip()
+        threading.Thread(
+            target=self._connection_status_worker,
+            args=(generation, public_url),
+            daemon=True,
+            name="mycomp-status-check",
+        ).start()
+
+    def _connection_status_worker(self, generation: int, public_url: str) -> None:
+        """Only declare green when the corresponding end-to-end check passes."""
+        try:
+            with urllib.request.urlopen(LOCAL_HEALTH, timeout=4) as response:
+                health = json.load(response)
+                local_ok = (
+                    response.status == 200
+                    and health.get("status") == "ok"
+                    and health.get("service") == "mycomp-bot"
+                )
+            if not local_ok:
+                raise RuntimeError("local MCP health check failed")
+            _configure_tailscale_endpoint(public_url)
+            _probe_public_funnel()  # public DNS + HTTPS + expected health JSON, not process state
+            result = ("green", "Public HTTPS OK")
+        except Exception:
+            result = ("red", "Public check failed")
+        self.connection_check_queue.put((generation, "tailscale", *result))
+
+        # /readyz is a local runtime probe, NOT evidence of a ChatGPT connector call.
+        try:
+            tunnel_status = self.openai_tunnel.status()
+            if tunnel_status.startswith("Runtime ready;"):
+                result = ("amber", "Ready; not verified")
+            elif tunnel_status.startswith(("Starting;", "Runtime running;")):
+                result = ("amber", "Starting / unverified")
+            else:
+                result = ("red", "Not connected")
+        except Exception:
+            result = ("red", "Health check failed")
+        self.connection_check_queue.put((generation, "tunnel", *result))
+
+        # A running Desktop Commander PID is not proof that remote MCP tools work.
+        try:
+            pid = _remote_commander_pid()
+            result = ("amber", "Running; unverified") if pid else ("red", "Agent not running")
+        except Exception:
+            result = ("red", "Agent check failed")
+        self.connection_check_queue.put((generation, "desktop", *result))
+
+    def _poll_connection_checks(self) -> None:
+        try:
+            while True:
+                generation, name, level, description = self.connection_check_queue.get_nowait()
+                if generation != self.connection_check_generation:
+                    continue
+                self._show_connection_result(name, level, description)
+                if name == "desktop":
+                    self.connection_checked_at.set(
+                        "Checked at " + time.strftime("%H:%M:%S")
+                        + "  •  Amber means runtime only; ChatGPT access not verified"
+                    )
+        except queue.Empty:
+            pass
+
     def _poll(self) -> None:
         self._process_update_events()
+        self._poll_connection_checks()
         if self._closing:
             return
         if SHOW_WINDOW_REQUEST.exists():
@@ -1332,6 +1466,7 @@ class MyCompBot(tk.Tk):
         self.deiconify()
         self.lift()
         self.focus_force()
+        self._refresh_connection_status()
     def _quit(self) -> None:
         self.openai_tunnel.stop()
         self._tailscale_watchdog_stop.set()
