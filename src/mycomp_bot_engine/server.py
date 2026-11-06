@@ -4,6 +4,8 @@ import argparse
 import base64
 import ipaddress
 import contextlib
+import asyncio
+import functools
 import hashlib
 import html
 import json
@@ -23,6 +25,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
+from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl, Field
 
@@ -34,6 +37,7 @@ from .jobs import Shell
 from .oauth import OAuthService, SQLiteTokenVerifier
 from .permissions import MCP_COMPATIBILITY_SCOPE, OFFLINE_ACCESS_SCOPE, PERMISSION_LEVELS, PermissionPolicy, level_scope
 from .runtime import RuntimeController
+from .tool_queue import ToolQueue
 
 ReadOperation = Literal["list", "read", "read_many", "stat", "stat_many", "search", "search_text", "hash", "tree"]
 ChangeOperation = Literal["write", "patch", "patch_many", "apply_patch", "copy", "move", "mkdir", "delete", "trash", "restore_backup"]
@@ -62,6 +66,7 @@ class EngineResources:
     observations: dict[str, dict[str, Any]] = field(default_factory=dict)
     screenshots: dict[str, Path] = field(default_factory=dict)
     observation_ttl_seconds: float = 900.0
+    tool_queue: ToolQueue = field(default_factory=ToolQueue)
     _closed: bool = field(default=False, init=False, repr=False)
 
     def close(self) -> None:
@@ -284,7 +289,21 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
         sensitive = {"authorization", "proxy-authorization", "cookie", "set-cookie"}
         return {key: ("<redacted>" if key.lower() in sensitive else value) for key, value in headers.items()}
 
+    def threaded(function):
+        @functools.wraps(function)
+        async def run(**arguments):
+            # Only the verified OAuth token selects a user; caller-provided
+            # metadata cannot bypass the per-user concurrency boundary.
+            token = get_access_token()
+            user = str(getattr(token, "client_id", None) or "local-owner")
+            return await resources.tool_queue.execute(
+                user, function.__name__,
+                lambda: asyncio.to_thread(function, **arguments),
+            )
+        return run
+
     @mcp.tool(description="Send exactly one HTTP API request and return the response. No browser or UI fallback is performed.")
+    @threaded
     def api(
         url: str, method: ApiMethod = "GET", headers: dict[str, str] | None = None,
         query: dict[str, Any] | None = None, json_body: Any | None = None, body: str | None = None,
@@ -372,6 +391,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
             return failed(error, request_id=request_id, started=started, backend="api")
 
     @mcp.tool(description="Run a Shell/CLI command or control a Shell task. Elevated uses the executable allowlist; Full Control may run any executable on the configured PATH with any non-protected cwd and skips the sudo owner gate. No UI fallback is performed.")
+    @threaded
     def shell(
         operation: ShellOperation = "run", executable: str | None = None, arguments: list[str] | None = None,
         privilege: ShellPrivilege = "user", cwd: str = ".", execution: ShellMode = "auto", task_id: str | None = None,
@@ -427,6 +447,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
             return failed(error, request_id=request_id, started=started, backend="shell")
 
     @mcp.tool(description="Execute explicit Chrome DOM/CDP actions in the dedicated browser. Launch may target a configured display. No GUI, Accessibility, Mouse, or OCR fallback is performed.")
+    @threaded
     def dom_cdp(
         action: DomAction | None = None, parameters: dict[str, Any] | None = None,
         steps: list[dict[str, Any]] | None = None, tab_id: str | None = None, display_id: str | None = None,
@@ -460,6 +481,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
             return failed(error, request_id=request_id, started=started, backend="dom_cdp")
 
     @mcp.tool(description="Run AppleScript or JavaScript for Automation through osascript and return stdout/stderr. No Accessibility or Mouse fallback is performed.")
+    @threaded
     def applescript(
         script: str, language: Literal["AppleScript", "JavaScript"] = "AppleScript",
         arguments: list[str] | None = None, execution: ShellMode = "foreground", timeout_seconds: float = 60,
@@ -485,6 +507,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
             return failed(error, request_id=request_id, started=started, backend="applescript")
 
     @mcp.tool(description="Read or act on macOS Accessibility elements only, optionally limited to a display. Coordinate and OCR fallback are explicitly.")
+    @threaded
     def accessibility(
         action: AccessibilityAction, parameters: dict[str, Any] | None = None, display_id: str | None = None,
         timeout_seconds: float = 30, approval: Literal["use_policy", "always_ask", "skip"] = "use_policy",
@@ -509,6 +532,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
             return failed(error, request_id=request_id, started=started, backend="accessibility")
 
     @mcp.tool(description="Send explicit keyboard input only: type text, paste text, press a key, or press a hotkey. display_id identifies the intended workspace but keyboard focus remains macOS-global.")
+    @threaded
     def keyboard(
         action: KeyboardAction, text: str | None = None, key: str | None = None,
         key_code: int | None = None, modifiers: list[str] | None = None, restore_clipboard: bool = True,
@@ -541,6 +565,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
             return failed(error, request_id=request_id, started=started, backend="keyboard")
 
     @mcp.tool(description="Perform direct coordinate Mouse/Trackpad actions only. With display_id, coordinates are local to that display. It does not search with Accessibility or OCR.")
+    @threaded
     def mouse(
         action: MouseAction, x: float | None = None, y: float | None = None,
         from_point: dict[str, float] | None = None, to_point: dict[str, float] | None = None,
@@ -573,6 +598,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
             return failed(error, request_id=request_id, started=started, backend="mouse")
 
     @mcp.tool(description="Capture a selected display/window/region or run local OCR and return display-local coordinates/confidence. It never moves or clicks the mouse.")
+    @threaded
     def vision(
         action: VisionAction, region: dict[str, float] | None = None, app: dict[str, Any] | None = None,
         window_index: int = 0, text: str | None = None, exact: bool = False, min_confidence: float = 0,

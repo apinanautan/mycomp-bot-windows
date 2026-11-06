@@ -113,6 +113,16 @@ class WindowsHostTests(unittest.TestCase):
             self.assertTrue(instance.tailscale_autofix)
             self.assertEqual(write.call_args.args[0]["MYCOMP_TAILSCALE_AUTOFIX"], "true")
 
+    def test_public_funnel_probe_requires_every_advertised_address(self):
+        from windows import MyCompBot as app
+        healthy = MagicMock(returncode=0, stdout='{"status":"ok","service":"mycomp-bot"}', stderr="")
+        failed = MagicMock(returncode=35, stdout="", stderr="TLS handshake failed")
+        with patch.object(app, "_public_funnel_ips", return_value=["203.0.113.1", "203.0.113.2"]), \
+             patch.object(app.subprocess, "run", side_effect=[healthy, failed]) as run:
+            with self.assertRaisesRegex(RuntimeError, "203.0.113.2: TLS handshake failed"):
+                app._probe_public_funnel()
+        self.assertEqual(run.call_count, 2)
+
     def test_public_tls_failure_rebinds_after_route_repair_and_obeys_cooldown(self):
         from windows import MyCompBot as app
         instance = app.MyCompBot.__new__(app.MyCompBot)
@@ -195,6 +205,30 @@ class WindowsHostTests(unittest.TestCase):
         self.assertTrue(command.endswith(" remote"))
         self.assertEqual(instance.remote_commander_process, fake_process)
         self.assertEqual(instance.remote_commander_pid, 24680)
+
+
+    def test_autofix_watchdog_works_without_tk_poll(self):
+        from windows import MyCompBot as app
+        instance = app.MyCompBot.__new__(app.MyCompBot)
+        instance.tailscale_autofix = True
+        instance.tailscale_busy = False
+        instance._tailscale_watchdog_stop = MagicMock()
+        instance._tailscale_watchdog_stop.is_set.side_effect = [False, True]
+        instance._run_tailscale_check = MagicMock()
+        with patch.object(app, "_read_env", return_value={"MYCOMP_PUBLIC_BASE_URL": "https://example.test.ts.net/mycomp"}), patch.object(app, "_configure_tailscale_endpoint"):
+            instance._autofix_watchdog_loop()
+        instance._run_tailscale_check.assert_called_once_with(manual=False)
+        self.assertFalse(instance.tailscale_busy)
+        instance._tailscale_watchdog_stop.wait.assert_called_once_with(app.TAILSCALE_AUTOFIX_INTERVAL)
+
+    def test_autofix_busy_flag_recovers_after_check_exception(self):
+        from windows import MyCompBot as app
+        instance = app.MyCompBot.__new__(app.MyCompBot)
+        instance.tailscale_busy = True
+        instance._check_tailscale = MagicMock(side_effect=RuntimeError("temporary failure"))
+        with self.assertRaisesRegex(RuntimeError, "temporary failure"):
+            instance._run_tailscale_check(manual=False)
+        self.assertFalse(instance.tailscale_busy)
 
 
 if __name__ == "__main__":

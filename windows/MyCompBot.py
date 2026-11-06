@@ -54,7 +54,38 @@ UI_AUTOMATION_HELPER = Path(__file__).resolve().with_name("UIAutomationBridge.ps
 AUTOSTART_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 AUTOSTART_NAME = "MyComp Bot"
 ISSUE_URL = "https://github.com/apinanautan/mycomp-bot-windows/issues/new?title=MyComp%20Bot%20error"
+APP_ICON_PNG = ROOT / "windows" / "assets" / "mycomp-bot.png"
+APP_ICON_ICO = ROOT / "windows" / "assets" / "mycomp-bot.ico"
 _SINGLE_INSTANCE_MUTEX = None
+
+
+def _refresh_existing_shortcut_icons() -> None:
+    """Update the icon only on shortcuts pointing to this specific checkout."""
+    if not APP_ICON_ICO.is_file():
+        return
+    try:
+        import win32com.client
+        shell = win32com.client.Dispatch("WScript.Shell")
+        locations = [
+            Path.home() / "Desktop" / "MyComp Bot.lnk",
+            Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" /
+            "Start Menu" / "Programs" / "MyComp Bot.lnk",
+        ]
+        for path in locations:
+            if not path.is_file():
+                continue
+            link = shell.CreateShortcut(str(path))
+            if Path(link.TargetPath).resolve() != (ROOT / ".venv/Scripts/pythonw.exe").resolve():
+                continue
+            if str(ROOT / "windows/MyCompBot.py").casefold() not in str(link.Arguments).casefold():
+                continue
+            icon = f"{APP_ICON_ICO},0"
+            if link.IconLocation != icon:
+                link.IconLocation = icon
+                link.Save()
+    except Exception:
+        # Shortcut updates are optional and must never prevent engine startup.
+        pass
 
 
 def _claim_single_instance(
@@ -172,6 +203,7 @@ def _public_funnel_ips() -> list[str]:
 def _probe_public_funnel() -> str:
     curl = shutil.which("curl.exe") or "curl.exe"
     errors = []
+    healthy_addresses = []
     for address in _public_funnel_ips():
         try:
             result = subprocess.run(
@@ -182,11 +214,17 @@ def _probe_public_funnel() -> str:
             )
             health = json.loads(result.stdout) if result.returncode == 0 else {}
             if health.get("status") == "ok" and health.get("service") == "mycomp-bot":
-                return address
-            errors.append(result.stderr.strip() or f"unexpected health response from {address}")
+                healthy_addresses.append(address)
+            else:
+                detail = result.stderr.strip() or "unexpected health response"
+                errors.append(f"{address}: {detail}")
         except Exception as error:
-            errors.append(str(error))
-    raise RuntimeError("Public Funnel probe failed: " + "; ".join(errors))
+            errors.append(f"{address}: {error}")
+    if errors:
+        raise RuntimeError("Public Funnel probe failed on one or more IPs: " + "; ".join(errors))
+    if not healthy_addresses:
+        raise RuntimeError("Public Funnel probe failed: DNS returned no healthy IPs")
+    return healthy_addresses[0]
 
 
 def _funnel_route_is_mycomp(status: dict[str, object]) -> bool:
@@ -533,8 +571,56 @@ class WindowsUIAutomation:
 
 
 class MyCompBot(tk.Tk):
+    def _openai_tunnel_settings(self):
+        window = tk.Toplevel(self)
+        window.title("OpenAI Tunnel")
+        window.columnconfigure(1, weight=1)
+        saved = self.openai_tunnel.load()
+        tunnel_id = tk.StringVar(value=saved.get("tunnel_id", ""))
+        key = tk.StringVar()
+        enabled = tk.BooleanVar(value=saved.get("enabled", False))
+        status = tk.StringVar(value=self.openai_tunnel.status())
+        for row, (label, variable) in enumerate((("Tunnel ID", tunnel_id), ("API key (blank keeps saved key)", key))):
+            ttk.Label(window, text=label).grid(row=row, column=0, padx=12, pady=8, sticky="w")
+            ttk.Entry(window, textvariable=variable, width=60, show="*" if row else "").grid(row=row, column=1, padx=12, pady=8, sticky="ew")
+        ttk.Checkbutton(window, text="Connect automatically while MyComp is running", variable=enabled).grid(row=2, column=0, columnspan=2, padx=12, pady=8)
+        def save():
+            try:
+                self.openai_tunnel.save(tunnel_id.get(), key.get(), enabled.get())
+                key.set("")
+                self.openai_tunnel.tick()
+                status.set(self.openai_tunnel.status())
+            except (OSError, ValueError, KeyError):
+                messagebox.showerror("OpenAI Tunnel", "Could not save or start. Check Tunnel ID, API key, and installed tunnel-client.exe.", parent=window)
+        ttk.Button(window, text="Save and connect", command=save).grid(row=3, column=0, padx=12, pady=8)
+        ttk.Button(window, text="Test readiness", command=lambda: status.set(self.openai_tunnel.status())).grid(row=3, column=1, padx=12, pady=8)
+        ttk.Label(window, textvariable=status, wraplength=650).grid(row=4, column=0, columnspan=2, padx=12, pady=8)
+        ttk.Label(window, text="Key is encrypted for this Windows user. Each new machine needs its own setup.", wraplength=650).grid(row=5, column=0, columnspan=2, padx=12, pady=8)
+
+    def _openai_tunnel_tick(self):
+        if not self._closing:
+            self.openai_tunnel.tick()
+            self.after(5000, self._openai_tunnel_tick)
+
     def __init__(self) -> None:
         super().__init__()
+        # Hide before building widgets so startup never opens a visible window.
+        self.withdraw()
+        if APP_ICON_ICO.is_file():
+            self.iconbitmap(default=str(APP_ICON_ICO))
+        if APP_ICON_PNG.is_file():
+            self._window_icon = tk.PhotoImage(file=str(APP_ICON_PNG))
+            self.iconphoto(True, self._window_icon)
+        _refresh_existing_shortcut_icons()
+        if __package__:
+            from .openai_tunnel import Tunnel
+        else:
+            from openai_tunnel import Tunnel
+        self.openai_tunnel = Tunnel(APP_DATA)
+        menu = tk.Menu(self)
+        menu.add_command(label="OpenAI Tunnel", command=self._openai_tunnel_settings)
+        self.config(menu=menu)
+        self.after(5000, self._openai_tunnel_tick)
         self.title("MyComp Bot for Windows")
         self.minsize(760, 780)
         self.process: subprocess.Popen[str] | None = None
@@ -555,7 +641,7 @@ class MyCompBot(tk.Tk):
             logger.setLevel(logging.INFO)
             logger.propagate = False
         self.tailscale_public_failures = 0
-        self.next_tailscale_check = time.monotonic()
+        self._tailscale_watchdog_stop = threading.Event()
         self.remote_commander_process: subprocess.Popen[str] | None = None
         self.remote_commander_log = None
         self.remote_commander_autostart = tk.BooleanVar(value=True)
@@ -593,6 +679,7 @@ class MyCompBot(tk.Tk):
         if not self.domain.get().strip():
             self.after(250, self._start_tunnel)
         self.after(200, self._poll)
+        threading.Thread(target=self._autofix_watchdog_loop, daemon=True, name="mycomp-tailscale-watchdog").start()
         self.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
         self._setup_tray()
 
@@ -872,16 +959,12 @@ class MyCompBot(tk.Tk):
                 manual, ok, detail = self.tailscale_queue.get_nowait()
                 self.tailscale_busy = False
                 self.tailscale_status.set(("Public connection OK: " if ok else "Public connection FAILED: ") + detail)
-                logging.getLogger("mycomp.tailscale").info("%s %s", "OK" if ok else "FAILED", detail)
                 if self.tray_icon is not None:
                     self.tray_icon.title = f"MyComp Bot - {detail}"
                 if manual:
                     (messagebox.showinfo if ok else messagebox.showerror)("Tailscale Funnel", detail)
         except queue.Empty:
             pass
-        if self.tailscale_autofix and time.monotonic() >= self.next_tailscale_check:
-            self.next_tailscale_check = time.monotonic() + TAILSCALE_AUTOFIX_INTERVAL
-            self._request_tailscale_check(manual=False)
         if self.process and self.process.poll() is not None:
             self.status.set("Engine stopped unexpectedly")
         elif healthy:
@@ -902,6 +985,36 @@ class MyCompBot(tk.Tk):
                 self.remote_commander_status.set(status)
         self.after(200, self._poll)
 
+    def _tailscale_result(self, manual: bool, ok: bool, detail: str) -> None:
+        logging.getLogger("mycomp.tailscale").info("%s %s", "OK" if ok else "FAILED", detail)
+        self.tailscale_queue.put((manual, ok, detail))
+
+    def _run_tailscale_check(self, manual: bool) -> None:
+        try:
+            self._check_tailscale(manual)
+        finally:
+            self.tailscale_busy = False
+
+    def _autofix_watchdog_loop(self) -> None:
+        """Check public Funnel independently of the Tk event loop.
+
+        A blocked desktop dialog must not pause external health monitoring.
+        Keep the configured public origin and all other Funnel routes intact.
+        """
+        while not self._tailscale_watchdog_stop.is_set():
+            if self.tailscale_autofix and not self.tailscale_busy:
+                try:
+                    _configure_tailscale_endpoint(_read_env().get("MYCOMP_PUBLIC_BASE_URL", ""))
+                except ValueError:
+                    pass
+                else:
+                    self.tailscale_busy = True
+                    try:
+                        self._run_tailscale_check(manual=False)
+                    finally:
+                        self.tailscale_busy = False
+            self._tailscale_watchdog_stop.wait(TAILSCALE_AUTOFIX_INTERVAL)
+
     def _request_tailscale_check(self, manual: bool) -> None:
         if self.tailscale_busy:
             if manual:
@@ -914,7 +1027,7 @@ class MyCompBot(tk.Tk):
                 messagebox.showerror("Tailscale Funnel", str(error))
             return
         self.tailscale_busy = True
-        threading.Thread(target=self._check_tailscale, args=(manual,), daemon=True).start()
+        threading.Thread(target=self._run_tailscale_check, args=(manual,), daemon=True).start()
 
     def _check_tailscale(self, manual: bool) -> None:
         try:
@@ -950,7 +1063,7 @@ class MyCompBot(tk.Tk):
                 self.tailscale_public_failures += 1
             else:
                 self.tailscale_public_failures += 1
-                self.tailscale_queue.put((manual, False, f"Public health check failed once; will retry in {TAILSCALE_AUTOFIX_INTERVAL}s before repairing. {public_error}"))
+                self._tailscale_result(manual, False, f"Public health check failed once; will retry in {TAILSCALE_AUTOFIX_INTERVAL}s before repairing. {public_error}")
                 return
 
             if should_repair:
@@ -992,9 +1105,9 @@ class MyCompBot(tk.Tk):
                 detail = f"MyComp Funnel repaired and verified (public IP {public_ip})."
             else:
                 detail = f"MyComp Funnel is healthy (public IP {public_ip})."
-            self.tailscale_queue.put((manual, True, detail))
+            self._tailscale_result(manual, True, detail)
         except Exception as error:
-            self.tailscale_queue.put((manual, False, str(error)))
+            self._tailscale_result(manual, False, str(error))
 
     def _toggle_tailscale_autofix(self) -> None:
         self.tailscale_autofix = not self.tailscale_autofix
@@ -1003,8 +1116,6 @@ class MyCompBot(tk.Tk):
         _write_env(values)
         if self.tray_icon is not None:
             self.tray_icon.update_menu()
-        if self.tailscale_autofix:
-            self.next_tailscale_check = time.monotonic()
 
     def _execute_ui(self, payload: dict[str, object]) -> dict[str, object]:
         action = str(payload.get("action")); x, y = payload.get("x"), payload.get("y")
@@ -1083,6 +1194,10 @@ class MyCompBot(tk.Tk):
         raise ValueError(f"unsupported Windows desktop action: {action}")
 
     def _tray_image(self) -> Image.Image:
+        if APP_ICON_PNG.is_file():
+            with Image.open(APP_ICON_PNG) as source:
+                return source.convert("RGBA").resize((64, 64), Image.Resampling.LANCZOS)
+        # Compatibility fallback for older source checkouts without icon assets.
         image = Image.new("RGB", (64, 64), "#1f2937")
         draw = ImageDraw.Draw(image)
         draw.rounded_rectangle((8, 8, 56, 56), radius=12, fill="#2563eb")
@@ -1092,6 +1207,7 @@ class MyCompBot(tk.Tk):
     def _setup_tray(self) -> None:
         menu = pystray.Menu(
             pystray.MenuItem("Open MyComp Bot", lambda icon, item: self.after(0, self._show_from_tray), default=True),
+            pystray.MenuItem("Tunnel / API key", lambda icon, item: self.after(0, self._openai_tunnel_settings)),
             pystray.MenuItem("Update MyComp Bot", lambda icon, item: self.after(0, self._request_update)),
             pystray.MenuItem("Repair Tailscale now", lambda icon, item: self.after(0, lambda: self._request_tailscale_check(manual=True))),
             pystray.MenuItem("AutoFix Tailscale", lambda icon, item: self.after(0, self._toggle_tailscale_autofix), checked=lambda item: self.tailscale_autofix),
@@ -1111,6 +1227,8 @@ class MyCompBot(tk.Tk):
         self.lift()
         self.focus_force()
     def _quit(self) -> None:
+        self.openai_tunnel.stop()
+        self._tailscale_watchdog_stop.set()
         self._closing = True
         if self.tray_icon is not None:
             self.tray_icon.stop()

@@ -94,6 +94,12 @@ class OAuthService:
                 )
             except sqlite3.OperationalError:
                 pass
+            try:
+                database.connection.execute(
+                    "ALTER TABLE oauth_tokens ADD COLUMN client_id TEXT NOT NULL DEFAULT ''"
+                )
+            except sqlite3.OperationalError:
+                pass
             database.connection.commit()
 
     def register_client(self, redirect_uris: list[str]) -> dict[str, object]:
@@ -215,14 +221,14 @@ class OAuthService:
                 "UPDATE oauth_codes SET used = 1 WHERE code_hash = ? AND used = 0", (_hash(code),)
             ).rowcount != 1:
                 raise PermissionError("authorization code was already used")
-            grant = self._issue(audience, row[3])
+            grant = self._issue(audience, row[3], row[2])
             self.database.connection.commit()
         return grant
 
     def refresh(self, refresh_token: str, audience: str) -> TokenGrant:
         with self.database.transaction():
             row = self.database.connection.execute(
-                "SELECT audience, expires, scope FROM oauth_tokens "
+                "SELECT audience, expires, scope, client_id FROM oauth_tokens "
                 "WHERE token_hash = ? AND kind = 'refresh' AND revoked = 0",
                 (_hash(refresh_token),),
             ).fetchone()
@@ -233,7 +239,7 @@ class OAuthService:
                 (_hash(refresh_token),),
             ).rowcount != 1:
                 raise PermissionError("refresh token was already used")
-            grant = self._issue(audience, row[2])
+            grant = self._issue(audience, row[2], row[3])
             self.database.connection.commit()
         return grant
 
@@ -266,19 +272,31 @@ class OAuthService:
             )
             self.database.connection.commit()
 
-    def _issue(self, audience: str, scope: str) -> TokenGrant:
+    def access_token_client_id(self, token: str) -> str | None:
+        """Return the verified OAuth client, never a caller-controlled metadata id."""
+        with self.database.transaction():
+            row = self.database.connection.execute(
+                "SELECT client_id, expires, revoked FROM oauth_tokens "
+                "WHERE token_hash = ? AND kind = 'access' AND audience = ?",
+                (_hash(token), self.resource_server_url),
+            ).fetchone()
+        if not row or row[1] < time.time() or row[2]:
+            return None
+        return str(row[0] or CLIENT_ID)
+
+    def _issue(self, audience: str, scope: str, client_id: str = CLIENT_ID) -> TokenGrant:
         access, refresh = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         now = time.time()
         self.database.connection.execute("DELETE FROM oauth_tokens WHERE expires < ? OR revoked = 1", (now,))
         self.database.connection.execute(
-            "INSERT INTO oauth_tokens(token_hash, kind, audience, expires, revoked, refresh_hash, scope) "
-            "VALUES (?, 'access', ?, ?, 0, ?, ?)",
-            (_hash(access), audience, now + 900, _hash(refresh), scope),
+            "INSERT INTO oauth_tokens(token_hash, kind, audience, expires, revoked, refresh_hash, scope, client_id) "
+            "VALUES (?, 'access', ?, ?, 0, ?, ?, ?)",
+            (_hash(access), audience, now + 900, _hash(refresh), scope, client_id),
         )
         self.database.connection.execute(
-            "INSERT INTO oauth_tokens(token_hash, kind, audience, expires, revoked, refresh_hash, scope) "
-            "VALUES (?, 'refresh', ?, ?, 0, NULL, ?)",
-            (_hash(refresh), audience, now + 30 * 86400, scope),
+            "INSERT INTO oauth_tokens(token_hash, kind, audience, expires, revoked, refresh_hash, scope, client_id) "
+            "VALUES (?, 'refresh', ?, ?, 0, NULL, ?, ?)",
+            (_hash(refresh), audience, now + 30 * 86400, scope, client_id),
         )
         return TokenGrant(access, refresh, scope)
 
@@ -295,4 +313,7 @@ class SQLiteTokenVerifier:
             return None
         from mcp.server.auth.provider import AccessToken
 
-        return AccessToken(token=token, client_id=CLIENT_ID, scopes=scopes, resource=self.service.resource_server_url)
+        client_id = self.service.access_token_client_id(token)
+        if client_id is None:
+            return None
+        return AccessToken(token=token, client_id=client_id, scopes=scopes, resource=self.service.resource_server_url)
