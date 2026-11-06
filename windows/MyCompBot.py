@@ -732,8 +732,12 @@ class MyCompBot(tk.Tk):
                         icon = source.resize((size, size), Image.Resampling.LANCZOS)
                     self._window_icons.append(ImageTk.PhotoImage(icon.convert("RGBA")))
             self.iconphoto(True, *self._window_icons)
-        self._native_window_icons = []
-        self.after_idle(self._apply_native_window_icon)
+        self._native_window_icons: dict[int, int] = {}
+        # The window is still withdrawn here. Tk creates/maps its native
+        # toplevel wrapper when shown, so setting WM_SETICON before <Map>
+        # does nothing (WM_GETICON returns zero and Windows draws a blurry
+        # class-icon fallback). Apply native icons only after mapping.
+        self.bind("<Map>", self._on_native_window_map, add="+")
         _refresh_existing_shortcut_icons()
         # The updater can retarget shortcuts after the new window starts.
         # Re-check the bundled icon once, after handoff completes.
@@ -1505,9 +1509,14 @@ class MyCompBot(tk.Tk):
     def _hide_to_tray(self) -> None:
         self.withdraw()
 
+    def _on_native_window_map(self, event: tk.Event) -> None:
+        """Set icons only after Tk maps the actual visible native toplevel."""
+        if event.widget is self:
+            self.after_idle(self._apply_native_window_icon)
+
     def _apply_native_window_icon(self) -> None:
-        """Apply real multi-size HICON handles to the actual top-level HWND."""
-        if os.name != "nt" or not APP_ICON_ICO.is_file() or self._native_window_icons:
+        """Bind DPI-sized titlebar and full-size taskbar HICONs to the mapped HWND."""
+        if os.name != "nt" or not APP_ICON_ICO.is_file() or self.state() == "withdrawn":
             return
         user32 = ctypes.windll.user32
         user32.LoadImageW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint,
@@ -1519,14 +1528,25 @@ class MyCompBot(tk.Tk):
         user32.GetAncestor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
         user32.GetAncestor.restype = ctypes.c_void_p
         hwnd = user32.GetAncestor(self.winfo_id(), 2) or self.winfo_id()
-        for slot, size in ((0, 16), (1, 48)):
-            handle = user32.LoadImageW(None, str(APP_ICON_ICO), 1, size, size, 0x10)
-            if handle:
-                self._native_window_icons.append(handle)
-                user32.SendMessageW(hwnd, 0x0080, slot, handle)
+        # Windows draws a 20px titlebar icon at 125% display scaling.
+        # Loading a 16px HICON makes DWM upscale it and blur the face.
+        user32.GetDpiForWindow.argtypes = [ctypes.c_void_p]
+        user32.GetDpiForWindow.restype = ctypes.c_uint
+        dpi = user32.GetDpiForWindow(hwnd) or 96
+        title_size = max(16, round(16 * dpi / 96))
+        for slot, size in ((0, title_size), (1, 48)):
+            handle = self._native_window_icons.get(slot)
+            if not handle:
+                handle = user32.LoadImageW(None, str(APP_ICON_ICO), 1, size, size, 0x10)
+                if not handle:
+                    continue
+                self._native_window_icons[slot] = handle
+            user32.SendMessageW(hwnd, 0x0080, slot, handle)
 
     def _show_from_tray(self) -> None:
         self.deiconify()
+        self.update_idletasks()
+        self._apply_native_window_icon()
         self.lift()
         self.focus_force()
         _refresh_existing_shortcut_icons()

@@ -13,6 +13,9 @@ class GuiEntryPointTests(unittest.TestCase):
         self.assertLess(GUI.index("SetProcessDpiAwareness(1)"), GUI.index("import tkinter as tk"))
         self.assertIn("SendMessageW(hwnd, 0x0080, slot, handle)", GUI)
         self.assertIn("self.after_idle(self._apply_native_window_icon)", GUI)
+        self.assertIn("self.bind(\"<Map>\", self._on_native_window_map", GUI)
+        self.assertIn("GetDpiForWindow", GUI)
+        self.assertIn("title_size = max(16, round(16 * dpi / 96))", GUI)
 
     def test_create_plugin_visible_without_opening_settings_dialog(self):
         self.assertEqual(GUI.count('text="สร้างปลั๊กอินใน ChatGPT"'), 1)
@@ -29,7 +32,8 @@ class GuiEntryPointTests(unittest.TestCase):
         self.assertEqual(png.size, (1024, 1024))
         with Image.open(ROOT / "windows/assets/mycomp-bot.ico") as icon:
             self.assertGreaterEqual(len(icon.ico.sizes()), 7)
-            for size in ((16,16),(32,32),(48,48),(256,256)):
+            self.assertIn((20, 20), icon.ico.sizes())
+            for size in ((16,16),(20,20),(32,32),(48,48),(256,256)):
                 frame = icon.ico.getimage(size).convert("RGBA")
                 self.assertEqual(frame.getpixel((0,0))[3],0)
 
