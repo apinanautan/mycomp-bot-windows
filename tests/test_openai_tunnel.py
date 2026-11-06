@@ -108,6 +108,34 @@ class TunnelTests(unittest.TestCase):
             self.assertIn("Runtime ready", prompt)
             self.assertNotIn("sk-", prompt)
 
+    def test_prompt_includes_per_machine_agent_desktop_after_dual_plugins(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            tunnel = Tunnel(Path(directory))
+            tunnel.directory.mkdir(parents=True)
+            tunnel.settings.write_text(json.dumps({
+                "tunnel_id": "tunnel_" + "d" * 32,
+                "enabled": True,
+            }), encoding="utf-8")
+            prompt = tunnel.plugin_prompt("User Named Bot", "https://desktop.example.ts.net/mycomp")
+            self.assertIn("User Named Bot (Tailscale)", prompt)
+            self.assertIn("User Named Bot (Tunnel)", prompt)
+            self.assertIn("https://github.com/vercel-labs/agent-desktop", prompt)
+            self.assertIn("agent-desktop version", prompt)
+            self.assertIn("agent-desktop status", prompt)
+            self.assertIn("agent-desktop mcp", prompt)
+            self.assertIn("stdio", prompt)
+            self.assertIn("list-windows", prompt)
+            self.assertIn("snapshot", prompt)
+            self.assertIn("ref ID", prompt)
+            self.assertIn("bridge", prompt)
+            self.assertIn("ยินยอม", prompt)
+            self.assertLess(prompt.index("ขั้นที่ 1:"), prompt.index("ขั้นที่ 2:"))
+            self.assertLess(prompt.index("ขั้นที่ 2:"), prompt.index("ขั้นที่ 3:"))
+            self.assertLess(prompt.index("ขั้นที่ 3:"), prompt.index("ขั้นที่ 4:"))
+            self.assertNotIn("\\n", prompt)
+            self.assertNotIn("sk-", prompt)
+
     def test_prompt_validates_plugin_name_and_tailscale_base(self):
         import json
         with tempfile.TemporaryDirectory() as directory:
