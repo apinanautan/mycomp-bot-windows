@@ -262,7 +262,8 @@ def redirect_launchers(previous: Path, installed: Path, log) -> None:
         "if(-not ($matchesOld -or $ifManaged)){continue};"
         "$link.TargetPath=$newExe;$link.Arguments=([char]34+$newScript+[char]34);"
         "$link.WorkingDirectory=$newRoot;"
-        "if([string]::IsNullOrWhiteSpace($link.IconLocation)){$link.IconLocation=$newIcon+',0'};"
+        "$managedIcon=($link.IconLocation -like '*\\MyComp Bot\\versions\\*\\windows\\assets\\mycomp-bot.ico*');"
+        "if([string]::IsNullOrWhiteSpace($link.IconLocation) -or $managedIcon){$link.IconLocation=$newIcon+',0'};"
         "$link.Save()"
         "};"
         # Keep the user's existing Desktop shortcut (including custom icon)

@@ -1,6 +1,16 @@
 from __future__ import annotations
 
 import ctypes
+# Set Windows DPI awareness before importing tkinter or creating the first
+# window. Otherwise Windows bitmap-scales the 16/32px window icons.
+if hasattr(ctypes, "windll"):
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)  # system-DPI-aware
+    except (AttributeError, OSError):
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except (AttributeError, OSError):
+            pass
 import ipaddress
 import json
 import logging
@@ -80,7 +90,14 @@ def _refresh_existing_shortcut_icons() -> None:
             if str(ROOT / "windows/MyCompBot.py").casefold() not in str(link.Arguments).casefold():
                 continue
             icon = f"{APP_ICON_ICO},0"
-            if link.IconLocation != icon:
+            current = str(link.IconLocation).split(",", 1)[0].replace("/", "\\").casefold()
+            # Only migrate MyComp's own bundled icon. Never replace a
+            # shortcut's independently chosen custom icon.
+            is_managed = (
+                current.endswith("\\windows\\assets\\mycomp-bot.ico")
+                and "\\mycomp bot\\versions\\" in current
+            )
+            if link.IconLocation != icon and (not current or is_managed):
                 link.IconLocation = icon
                 link.Save()
     except Exception:
@@ -571,7 +588,7 @@ class WindowsUIAutomation:
 
 
 class MyCompBot(tk.Tk):
-    def _show_plugin_prompt(self, parent: tk.Toplevel) -> None:
+    def _show_plugin_prompt(self, parent: tk.Misc, launch_chatgpt: bool = False) -> None:
         name = simpledialog.askstring(
             "ตั้งชื่อปลั๊กอิน",
             "ต้องการตั้งชื่อปลั๊กอินใหม่ว่าอะไร?",
@@ -591,14 +608,22 @@ class MyCompBot(tk.Tk):
             )
             return
         viewer = tk.Toplevel(parent)
-        viewer.title(f"พรอมต์สร้างปลั๊กอิน: {name.strip()}")
+        viewer.title(f"สร้างปลั๊กอิน: {name.strip()} Tailscale / {name.strip()} Tunnel")
         viewer.geometry("820x570")
         viewer.columnconfigure(0, weight=1)
-        viewer.rowconfigure(0, weight=1)
+        viewer.rowconfigure(1, weight=1)
+        instructions = (
+            "พรอมต์พร้อมแล้ว: เปิด Plugin Creator ใน ChatGPT แล้วกด Ctrl+V "
+            "เพื่อวางคำสั่งสร้างปลั๊กอิน 2 ตัว จากนั้นตรวจสอบและส่งข้อความ "
+            "(ไม่ต้องกรอก API key)"
+        )
+        ttk.Label(viewer, text=instructions, wraplength=770, justify="left").grid(
+            row=0, column=0, columnspan=2, padx=12, pady=(12, 4), sticky="w"
+        )
         text = tk.Text(viewer, wrap="word", font=("Segoe UI", 11))
-        text.grid(row=0, column=0, padx=12, pady=12, sticky="nsew")
+        text.grid(row=1, column=0, padx=(12, 0), pady=8, sticky="nsew")
         scrollbar = ttk.Scrollbar(viewer, orient="vertical", command=text.yview)
-        scrollbar.grid(row=0, column=1, sticky="ns", pady=12)
+        scrollbar.grid(row=1, column=1, sticky="ns", pady=8, padx=(0, 10))
         text.configure(yscrollcommand=scrollbar.set)
         text.insert("1.0", prompt)
         text.configure(state="disabled")
@@ -607,11 +632,24 @@ class MyCompBot(tk.Tk):
             viewer.clipboard_clear()
             viewer.clipboard_append(prompt)
             viewer.update_idletasks()
-            messagebox.showinfo("MyComp Bot", "คัดลอกพรอมต์แล้ว", parent=viewer)
 
-        ttk.Button(viewer, text="คัดลอกพรอมต์", command=copy_prompt).grid(
-            row=1, column=0, padx=12, pady=(0, 12), sticky="e"
+        def open_creator() -> None:
+            copy_prompt()
+            # Use the known public Plugin Creator page, not an undocumented
+            # query-string prompt that might auto-send or leak the Tunnel ID.
+            webbrowser.open(
+                "https://chatgpt.com/plugins/plugin_connector_1p_e1a10c53223481918a42f1510ec46c1e"
+            )
+
+        actions = ttk.Frame(viewer)
+        actions.grid(row=2, column=0, columnspan=2, padx=12, pady=(2, 12), sticky="e")
+        ttk.Button(actions, text="คัดลอกพรอมต์", command=copy_prompt).pack(side="left", padx=5)
+        ttk.Button(actions, text="เปิด ChatGPT Plugin Creator", command=open_creator).pack(
+            side="left", padx=5
         )
+        copy_prompt()
+        if launch_chatgpt:
+            open_creator()
 
     def _openai_tunnel_settings(self):
         window = tk.Toplevel(self)
@@ -685,19 +723,20 @@ class MyCompBot(tk.Tk):
         if APP_ICON_ICO.is_file():
             self.iconbitmap(default=str(APP_ICON_ICO))
         if APP_ICON_PNG.is_file():
-            # Supply actual small icon frames rather than scaling a single 32px
-            # frame for both the title bar and taskbar. Retain references so
-            # Tk does not garbage-collect the Win32 icon images.
+            # The original artwork remains 1024px; use native ICO frames at
+            # Windows title-bar/taskbar dimensions instead of a bitmap upscale.
             self._window_icons = []
             with Image.open(APP_ICON_ICO if APP_ICON_ICO.is_file() else APP_ICON_PNG) as source:
                 sizes = getattr(getattr(source, "ico", None), "sizes", lambda: set())()
-                for size in (32, 16, 48, 64, 256):
+                for size in (256, 64, 48, 32, 16):
                     if (size, size) in sizes:
                         icon = source.ico.getimage((size, size))
                     else:
                         icon = source.resize((size, size), Image.Resampling.LANCZOS)
                     self._window_icons.append(ImageTk.PhotoImage(icon.convert("RGBA")))
             self.iconphoto(True, *self._window_icons)
+        self._native_window_icons = []
+        self.after_idle(self._apply_native_window_icon)
         _refresh_existing_shortcut_icons()
         if __package__:
             from .openai_tunnel import Tunnel
@@ -812,6 +851,11 @@ class MyCompBot(tk.Tk):
             healthbar, text="Check now", command=self._refresh_connection_status,
             style="MyComp.TButton",
         ).grid(row=0, column=3, rowspan=2, sticky="e", padx=(4, 0))
+        ttk.Button(
+            healthbar, text="สร้างปลั๊กอินใน ChatGPT (พร้อมพรอมต์)",
+            command=lambda: self._show_plugin_prompt(self, launch_chatgpt=True),
+            style="MyComp.TButton",
+        ).grid(row=3, column=0, columnspan=4, sticky="ew", pady=(9, 0))
         ttk.Label(
             healthbar, textvariable=self.connection_checked_at, style="MyComp.TLabel",
         ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(5, 0))
@@ -847,7 +891,7 @@ class MyCompBot(tk.Tk):
         ttk.Button(frame, style="MyComp.TButton", text="Copy", command=self._copy_endpoint).grid(row=9, column=2, sticky="e", pady=(14, 0))
         ttk.Button(frame, style="MyComp.TButton", text="Start Free Temporary Tunnel", command=self._start_tunnel).grid(row=10, column=1, sticky="w", pady=(12, 0))
         ttk.Button(frame, style="MyComp.TButton", text="Stop Tunnel", command=self._stop_tunnel).grid(row=10, column=2, sticky="e", pady=(12, 0))
-        ttk.Button(frame, style="MyComp.TButton", text="Open ChatGPT Plugins & Copy MCP URL", command=self._open_chatgpt_plugins).grid(row=11, column=1, sticky="w", pady=(12, 0))
+        ttk.Button(frame, style="MyComp.TButton", text="สร้างปลั๊กอินใน ChatGPT", command=lambda: self._show_plugin_prompt(self, launch_chatgpt=True)).grid(row=11, column=1, sticky="w", pady=(12, 0))
         ttk.Button(frame, style="MyComp.TButton", text="Copy Owner Consent Code", command=self._copy_owner_consent_code).grid(row=11, column=2, sticky="e", pady=(12, 0))
         ttk.Checkbutton(frame, style="MyComp.TCheckbutton", text="Start MyComp Bot automatically when I sign in to Windows", variable=self.autostart, command=self._toggle_autostart).grid(row=12, column=0, columnspan=3, sticky="w", pady=(18, 0))
         ttk.Checkbutton(frame, style="MyComp.TCheckbutton", text="Start Remote Desktop Commander automatically with MyComp Bot", variable=self.remote_commander_autostart, command=self._toggle_remote_commander_autostart).grid(row=13, column=0, columnspan=3, sticky="w", pady=(8, 0))
@@ -1461,6 +1505,26 @@ class MyCompBot(tk.Tk):
 
     def _hide_to_tray(self) -> None:
         self.withdraw()
+
+    def _apply_native_window_icon(self) -> None:
+        """Apply real multi-size HICON handles to the actual top-level HWND."""
+        if os.name != "nt" or not APP_ICON_ICO.is_file() or self._native_window_icons:
+            return
+        user32 = ctypes.windll.user32
+        user32.LoadImageW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint,
+                                      ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+        user32.LoadImageW.restype = ctypes.c_void_p
+        user32.SendMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint,
+                                        ctypes.c_size_t, ctypes.c_void_p]
+        user32.SendMessageW.restype = ctypes.c_ssize_t
+        user32.GetAncestor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        user32.GetAncestor.restype = ctypes.c_void_p
+        hwnd = user32.GetAncestor(self.winfo_id(), 2) or self.winfo_id()
+        for slot, size in ((0, 16), (1, 48)):
+            handle = user32.LoadImageW(None, str(APP_ICON_ICO), 1, size, size, 0x10)
+            if handle:
+                self._native_window_icons.append(handle)
+                user32.SendMessageW(hwnd, 0x0080, slot, handle)
 
     def _show_from_tray(self) -> None:
         self.deiconify()

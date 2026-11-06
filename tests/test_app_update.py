@@ -231,7 +231,9 @@ class AppUpdateTests(unittest.TestCase):
             self.assertIn("$shortcut=$shell.CreateShortcut($desktop)", ps)
             self.assertIn("$shortcut.TargetPath=$newExe", ps)
             self.assertIn("$shortcut.IconLocation=$newIcon+',0'", ps)
-            self.assertIn("if([string]::IsNullOrWhiteSpace($link.IconLocation))", ps)
+            self.assertIn("$managedIcon=", ps)
+            self.assertIn(" -or $managedIcon)", ps)
+            self.assertIn("mycomp-bot.ico*", ps)
             self.assertNotIn("$link.IconLocation=$newIcon+',0';$link.Save()", ps)
 
     def test_update_worker_allows_dirty_checkout_without_overwriting(self):
