@@ -210,6 +210,25 @@ class AppUpdateTests(unittest.TestCase):
             self.assertIn("mycomp-bot.ico", command)
             self.assertIn("OrdinalIgnoreCase", command)
 
+    def test_updater_creates_desktop_shortcut_only_when_missing(self):
+        import base64
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            old, new = base / "old", base / "new"
+            old.mkdir()
+            new.mkdir()
+            with patch.object(update.subprocess, "run") as invoke, \
+                 patch("winreg.OpenKey", side_effect=FileNotFoundError()):
+                invoke.return_value.returncode = 0
+                update.redirect_launchers(old, new, io.StringIO())
+            ps = base64.b64decode(invoke.call_args.args[0][-1]).decode("utf-16le")
+            self.assertIn("if(-not (Test-Path -LiteralPath $desktop))", ps)
+            self.assertIn("$shortcut=$shell.CreateShortcut($desktop)", ps)
+            self.assertIn("$shortcut.TargetPath=$newExe", ps)
+            self.assertIn("$shortcut.IconLocation=$newIcon+',0'", ps)
+            self.assertIn("if([string]::IsNullOrWhiteSpace($link.IconLocation))", ps)
+            self.assertNotIn("$link.IconLocation=$newIcon+',0';$link.Save()", ps)
+
     def test_update_worker_allows_dirty_checkout_without_overwriting(self):
         import queue
         from windows import MyCompBot as gui

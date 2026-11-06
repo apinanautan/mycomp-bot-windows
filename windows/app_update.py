@@ -252,7 +252,18 @@ def redirect_launchers(previous: Path, installed: Path, log) -> None:
         "if($link.TargetPath -ine $oldExe -or "
         "$link.Arguments.IndexOf($oldScript,[StringComparison]::OrdinalIgnoreCase) -lt 0){continue};"
         "$link.TargetPath=$newExe;$link.Arguments='"'+$newScript+'"';"
-        "$link.WorkingDirectory=$newRoot;$link.IconLocation=$newIcon+',0';$link.Save()"
+        "$link.WorkingDirectory=$newRoot;"
+        "if([string]::IsNullOrWhiteSpace($link.IconLocation)){$link.IconLocation=$newIcon+',0'};"
+        "$link.Save()"
+        "};"
+        # Keep the user's existing Desktop shortcut (including custom icon)
+        # even if it points to a different application. Create only if absent.
+        "$desktop=[IO.Path]::Combine([Environment]::GetFolderPath('Desktop'),'MyComp Bot.lnk');"
+        "if(-not (Test-Path -LiteralPath $desktop)){"
+        "$shortcut=$shell.CreateShortcut($desktop);"
+        "$shortcut.TargetPath=$newExe;$shortcut.Arguments='"'+$newScript+'"';"
+        "$shortcut.WorkingDirectory=$newRoot;$shortcut.IconLocation=$newIcon+',0';"
+        "$shortcut.Description='Launch MyComp Bot';$shortcut.Save()"
         "}"
     )
     result = subprocess.run(
