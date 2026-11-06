@@ -23,7 +23,7 @@ import zlib
 from urllib.parse import urlencode, urlsplit
 from ctypes import wintypes
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 import pystray
 from PIL import Image, ImageDraw
@@ -572,17 +572,26 @@ class WindowsUIAutomation:
 
 class MyCompBot(tk.Tk):
     def _show_plugin_prompt(self, parent: tk.Toplevel) -> None:
+        name = simpledialog.askstring(
+            "ตั้งชื่อปลั๊กอิน",
+            "ต้องการตั้งชื่อปลั๊กอินใหม่ว่าอะไร?",
+            parent=parent,
+        )
+        if name is None:
+            return  # Cancel: do not construct or copy any prompt.
+        # Only the saved public base is passed; no API key, token or .env body.
+        tailscale_base = _read_env().get("MYCOMP_PUBLIC_BASE_URL", "")
         try:
-            prompt = self.openai_tunnel.plugin_prompt()
-        except (ValueError, OSError, TypeError, KeyError):
+            prompt = self.openai_tunnel.plugin_prompt(name, tailscale_base)
+        except (ValueError, OSError, TypeError, KeyError) as error:
             messagebox.showwarning(
-                "OpenAI Tunnel",
-                "กรุณาบันทึก Tunnel ID ที่ถูกต้องในหน้า OpenAI Tunnel ก่อนสร้างพรอมต์",
+                "ตั้งค่าปลั๊กอิน",
+                f"กรุณาบันทึกชื่อ, Tunnel ID และ Tailscale HTTPS URL ที่ถูกต้องก่อนสร้างพรอมต์\n{error}",
                 parent=parent,
             )
             return
         viewer = tk.Toplevel(parent)
-        viewer.title("พรอมต์สร้างปลั๊กอิน MyComp Bot")
+        viewer.title(f"พรอมต์สร้างปลั๊กอิน: {name.strip()}")
         viewer.geometry("820x570")
         viewer.columnconfigure(0, weight=1)
         viewer.rowconfigure(0, weight=1)

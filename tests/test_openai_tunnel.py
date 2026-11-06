@@ -39,7 +39,7 @@ class TunnelTests(unittest.TestCase):
             }), encoding="utf-8")
             tunnel.secret.write_bytes(b"sk-ALSO-NEVER-EXPOSE")
             with patch.object(tunnel.secret.__class__, "read_bytes", side_effect=AssertionError("secrets must not be read")):
-                result = tunnel.plugin_prompt()
+                result = tunnel.plugin_prompt("ทดสอบปลั๊กอิน", "https://desktop.example.ts.net/mycomp")
             self.assertIn("tunnel_" + "a" * 32, result)
             self.assertIn(tunnel.mcp_endpoint, result)
             self.assertIn("tools/list", result)
@@ -59,10 +59,10 @@ class TunnelTests(unittest.TestCase):
                 tunnel.directory.mkdir(parents=True, exist_ok=True)
                 tunnel.settings.write_text(json.dumps({"tunnel_id": value}), encoding="utf-8")
                 with self.subTest(value=value), self.assertRaises(ValueError):
-                    tunnel.plugin_prompt()
+                    tunnel.plugin_prompt("ทดสอบปลั๊กอิน", "https://desktop.example.ts.net/mycomp")
             tunnel.settings.unlink()
             with self.assertRaises(ValueError):
-                tunnel.plugin_prompt()
+                tunnel.plugin_prompt("ทดสอบปลั๊กอิน", "https://desktop.example.ts.net/mycomp")
 
     def test_runtime_process_and_prompt_use_same_binding(self):
         import json
@@ -82,9 +82,61 @@ class TunnelTests(unittest.TestCase):
                 tunnel.start()
             args = start.call_args.args[0]
             self.assertEqual(args[args.index("--mcp.server-url") + 1], tunnel.mcp_endpoint)
-            self.assertIn(tunnel.mcp_endpoint, tunnel.plugin_prompt())
-            self.assertNotIn("sk-", tunnel.plugin_prompt())
+            self.assertIn(tunnel.mcp_endpoint, tunnel.plugin_prompt("ทดสอบปลั๊กอิน", "https://desktop.example.ts.net/mycomp"))
+            self.assertNotIn("sk-", tunnel.plugin_prompt("ทดสอบปลั๊กอิน", "https://desktop.example.ts.net/mycomp"))
             tunnel.stop()
+
+
+    def test_dual_transport_prompt_and_name_and_failover(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            tunnel = Tunnel(Path(directory))
+            tunnel.directory.mkdir(parents=True)
+            tunnel.settings.write_text(json.dumps({
+                "tunnel_id": "tunnel_" + "c" * 32,
+                "enabled": True,
+            }), encoding="utf-8")
+            prompt = tunnel.plugin_prompt("My Home Robot", "https://desktop.example.ts.net/mycomp")
+            self.assertIn("My Home Robot", prompt)
+            self.assertIn("https://desktop.example.ts.net/mycomp/mcp", prompt)
+            self.assertIn("tunnel_" + "c" * 32, prompt)
+            self.assertIn("Tailscale", prompt)
+            self.assertIn("OpenAI Secure MCP Tunnel", prompt)
+            self.assertIn("failover", prompt)
+            self.assertIn("tools/list", prompt)
+            self.assertIn("OAuth", prompt)
+            self.assertIn("Runtime ready", prompt)
+            self.assertNotIn("sk-", prompt)
+
+    def test_prompt_validates_plugin_name_and_tailscale_base(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            tunnel = Tunnel(Path(directory))
+            tunnel.directory.mkdir(parents=True)
+            tunnel.settings.write_text(json.dumps({
+                "tunnel_id": "tunnel_" + "b" * 32,
+            }), encoding="utf-8")
+            for name in ("", " ", "x" * 81, "invalid\nname", None):
+                with self.subTest(name=name), self.assertRaises(ValueError):
+                    tunnel.plugin_prompt(name, "https://desktop.example.ts.net/mycomp")
+            for base in ("", "http://desktop.example.ts.net", "https://example.com",
+                         "https://desktop.example.ts.net?token=private",
+                         "https://name:secret@desktop.example.ts.net",
+                         "https://desktop.example.ts.net:5555"):
+                with self.subTest(base=base), self.assertRaises(ValueError):
+                    tunnel.plugin_prompt("My Robot", base)
+
+    def test_tailscale_port_and_subpath_preserved(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            tunnel = Tunnel(Path(directory))
+            tunnel.directory.mkdir(parents=True)
+            tunnel.settings.write_text(json.dumps({
+                "tunnel_id": "tunnel_" + "c" * 32,
+            }), encoding="utf-8")
+            prompt = tunnel.plugin_prompt("Test Bot", "https://desktop.example.ts.net:8443/mycomp/")
+            self.assertIn("https://desktop.example.ts.net:8443/mycomp/mcp", prompt)
+            self.assertNotIn("https://desktop.example.ts.net:8443/mycomp//mcp", prompt)
 
 
 if __name__ == "__main__":

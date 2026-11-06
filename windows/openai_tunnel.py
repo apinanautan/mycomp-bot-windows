@@ -72,28 +72,56 @@ class Tunnel:
         """The exact local binding passed to the Tunnel runtime."""
         return LOCAL_MCP_ENDPOINT
 
-    def plugin_prompt(self) -> str:
-        """Build from saved non-secret settings only; never inspect key.dpapi or .env."""
+    def plugin_prompt(self, plugin_name: str, tailscale_base: str) -> str:
+        """Build both routes from verified, non-secret settings; no secret reads."""
+        from urllib.parse import urlsplit, urlunsplit
+
+        name = plugin_name.strip() if isinstance(plugin_name, str) else ""
+        if not name or len(name) > 80 or any(ord(char) < 32 for char in name):
+            raise ValueError("Enter a plugin name (1–80 characters) before creating a prompt.")
         saved = self.load()
         tunnel_id = validate_tunnel_id(saved.get("tunnel_id"))
+        url = urlsplit(tailscale_base.strip() if isinstance(tailscale_base, str) else "")
+        if (
+            url.scheme != "https" or not url.hostname
+            or not url.hostname.endswith(".ts.net")
+            or url.username or url.password or url.query or url.fragment
+        ):
+            raise ValueError("Save a valid Tailscale HTTPS base URL first.")
+        try:
+            port = url.port or 443
+        except ValueError as error:
+            raise ValueError("Invalid Tailscale port.") from error
+        if port not in {443, 8443, 10000}:
+            raise ValueError("Unsupported Tailscale Funnel HTTPS port.")
+        tailscale_endpoint = urlunsplit(("https", url.netloc, url.path.rstrip("/") + "/mcp", "", ""))
         endpoint = self.mcp_endpoint
         return (
-            "สร้างปลั๊กอิน MyComp Bot ผ่าน OpenAI Secure MCP Tunnel สำหรับเครื่องนี้ โดยตรวจสอบความรองรับจริงก่อนดำเนินการ\\n\\n"
-            f"Tunnel ID ที่บันทึกไว้: {tunnel_id}\\n"
-            f"Local MCP binding ของ runtime เครื่องนี้: {endpoint}\\n\\n"
-            "localhost / 127.0.0.1 คือปลายทางภายในเครื่อง Windows นี้เท่านั้น "
-            "ไม่ใช่ public URL ที่ ChatGPT Cloud สามารถเรียกได้โดยตรง\\n"
-            "ตรวจสอบว่า OpenAI Secure MCP Tunnel และการผูกปลั๊กอินกับ Tunnel ID นี้รองรับจริงหรือไม่ "
-            "ห้ามคาดเดาหรือแต่ง connector URL หรือ tunnel URL เอง\\n"
-            "หากรองรับ ให้เชื่อมผ่านช่องทาง Tunnel ที่ได้รับการยืนยัน จากนั้นเรียก tools/list "
-            "เพื่อค้นหาเครื่องมือที่ให้บริการจริง และทดสอบเรียกเครื่องมืออ่านสถานะที่ปลอดภัย "
-            "โดยไม่แก้ไขข้อมูลบนเครื่อง\\n"
-            "รักษา OAuth/authentication และสิทธิ์เดิมของ MyComp Bot "
-            "ห้ามขยาย permission, ปิด authentication หรือขอ API key/token/ไฟล์ .env ในพรอมต์นี้\\n"
-            "Runtime ready เป็นเพียงสถานะของ Tunnel runtime ไม่ใช่หลักฐานว่า ChatGPT "
-            "เรียกใช้เครื่องมือผ่าน Tunnel สำเร็จ ต้องยืนยันผล tools/list และการเรียกอ่านสถานะจริง\\n"
-            "หากปลั๊กอินหรือการเชื่อมต่อผ่าน Secure MCP Tunnel ยังไม่รองรับ "
-            "ให้ระบุข้อจำกัดตามจริง ไม่สร้างปลั๊กอินหลอกหรืออ้างว่าเชื่อมต่อสำเร็จ"
+            f"ชื่อปลั๊กอินที่ผู้ใช้เลือก: {name}\\n"
+            "สร้างปลั๊กอินสำหรับ MyComp Bot ที่รองรับการเชื่อมต่อ 2 ช่องทาง "
+            "คือ Tailscale และ OpenAI Secure MCP Tunnel โดยตรวจสอบว่าระบบปลั๊กอินรองรับจริงก่อนดำเนินการ\\n\\n"
+            f"ช่องทาง Tailscale HTTPS MCP: {tailscale_endpoint}\\n"
+            f"ช่องทาง OpenAI Secure MCP Tunnel ID: {tunnel_id}\\n"
+            f"Local MCP binding ของ Tunnel runtime: {endpoint}\\n\\n"
+            "localhost / 127.0.0.1 เป็นปลายทางภายในเครื่อง Windows เท่านั้น "
+            "ChatGPT Cloud ไม่สามารถเรียก URL นี้โดยตรงได้\\n"
+            "ตรวจสอบการเข้าถึง Tailscale Funnel จากภายนอกจริง รวมถึง OAuth และเครือข่าย "
+            "ห้ามสรุปว่า URL .ts.net เข้าถึงจากคลาวด์ได้เพียงเพราะเป็น HTTPS\\n"
+            "ตรวจสอบการรองรับ Secure MCP Tunnel และรูปแบบการผูก Tunnel ID อย่างเป็นทางการ "
+            "ห้ามเดา connector URL หรือสร้าง endpoint ปลอม\\n"
+            "หากทั้งสองช่องทางใช้ได้และแพลตฟอร์มรองรับ ให้สร้างปลั๊กอินชื่อที่ผู้ใช้เลือก "
+            "ซึ่งมีเส้นทางหลักและเส้นทางสำรอง (failover) เมื่อช่องทางหนึ่งขัดข้อง "
+            "โดยใช้สิทธิ์เดิมและไม่สร้างการเรียกซ้ำโดยไม่ตั้งใจ\\n"
+            "ทดสอบ MCP tools/list และเรียกเครื่องมืออ่านสถานะที่ปลอดภัยผ่านแต่ละเส้นทางจริง "
+            "ก่อนยืนยันว่าพร้อมใช้งาน\\n"
+            "ตรวจสอบความล้มเหลวการเชื่อมต่อก่อนสลับเส้นทาง ห้ามสั่งรันซ้ำสำหรับคำสั่ง "
+            "ที่แก้ข้อมูลหรือไม่สามารถยืนยันได้ว่าไม่ได้ทำไปแล้ว และห้ามลดระดับการยืนยันตัวตน\\n"
+            "รักษา OAuth/authentication และขอบเขตสิทธิ์ของ MyComp Bot เดิม "
+            "ห้ามร้องขอหรือแสดง API key, access token, .env หรือความลับในพรอมต์\\n"
+            "Runtime ready ไม่ใช่หลักฐานว่า ChatGPT เรียกใช้เครื่องมือสำเร็จ "
+            "ต้องแสดงผลการทดสอบ tools/list และการเรียกอ่านสถานะจริง\\n"
+            "ถ้าแพลตฟอร์มไม่รองรับปลั๊กอินเส้นทางคู่ ให้แจ้งข้อจำกัดและเสนอรูปแบบ "
+            "ที่รองรับจริงเท่านั้น ห้ามอ้างว่ารองรับ failover หรือสร้างปลั๊กอินหลอก"
         ).replace("\\n", "\n")
 
     def save(self, tunnel_id: str, key: str, enabled: bool):

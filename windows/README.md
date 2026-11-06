@@ -11,6 +11,24 @@ PowerShell -ExecutionPolicy Bypass -File '.\windows\Run MyComp Bot.ps1'
 โปรดอย่า commit `.env`, OAuth token/callback, owner consent code, logs, `.venv` หรือ build output
 
 ตั้งแต่รุ่น 1.1.4 กด **Update MyComp Bot** ในหน้าต่างหรือเมนู tray เพื่ออัปเดตจาก GitHub Release ได้ โปรแกรมจะติดตั้งแล้วเปิดกลับเอง และเก็บการตั้งค่าเดิมไว้ รายละเอียดการอัปเดตอยู่ใน `%LOCALAPPDATA%\MyComp Bot\update.log`.
+## Release 1.1.9: named dual-transport plugin prompt
+
+In **OpenAI Tunnel**, click **พรอมต์สร้างปลั๊กอิน**. The app first asks
+**ต้องการตั้งชื่อปลั๊กอินใหม่ว่าอะไร?** and then opens the prompt viewer
+with **คัดลอกพรอมต์**. Cancelling the name question creates no prompt.
+
+The generated prompt names the user-selected plugin and includes both the
+saved Tailscale HTTPS MCP endpoint (including its actual path and port) and
+the saved Secure MCP Tunnel ID and shared local runtime binding. It asks
+the plugin builder to verify both transports, perform safe tools/list and
+read-status tests, preserve existing authentication and permissions, and
+use failover only if actually supported. Never replay an uncertain
+side-effecting command on failover. Localhost is not a cloud endpoint.
+No API key, token, or secret is included.
+
+The original orange/yellow robot icon, system tray startup and existing
+shortcut icon remain unchanged.
+
 ## Release 1.1.8: Secure MCP Tunnel plugin prompt
 
 Open the **OpenAI Tunnel** settings window from the application menu or
