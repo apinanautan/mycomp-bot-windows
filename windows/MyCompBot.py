@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import ctypes
 import ipaddress
@@ -648,6 +648,14 @@ class MyCompBot(tk.Tk):
             self.after(5000, self._openai_tunnel_tick)
 
     def __init__(self) -> None:
+        # A stable AppUserModelID makes Windows group the taskbar window under
+        # MyComp Bot instead of showing the generic pythonw.exe application icon.
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "MyCompBot.Windows"
+            )
+        except (AttributeError, OSError):
+            pass
         super().__init__()
         # Hide before building widgets so startup never opens a visible window.
         self.withdraw()
@@ -667,7 +675,17 @@ class MyCompBot(tk.Tk):
         self.config(menu=menu)
         self.after(5000, self._openai_tunnel_tick)
         self.title("MyComp Bot for Windows")
-        self.minsize(760, 780)
+        self.geometry("720x610")
+        self.minsize(620, 460)
+        self.configure(background="#ffffff")
+        style = ttk.Style(self)
+        style.configure("MyComp.TFrame", background="#ffffff")
+        style.configure("MyComp.TLabel", background="#ffffff", foreground="#263445", font=("Segoe UI", 9))
+        style.configure("MyComp.Title.TLabel", background="#ffffff", foreground="#172434", font=("Segoe UI", 17, "bold"))
+        style.configure("MyComp.TCheckbutton", background="#ffffff", foreground="#263445")
+        style.configure("MyComp.TButton", font=("Segoe UI", 9), padding=(9, 5))
+        style.configure("MyComp.TEntry", padding=5)
+        style.configure("MyComp.TCombobox", padding=5)
         self.process: subprocess.Popen[str] | None = None
         self.tunnel: subprocess.Popen[str] | None = None
         self.tray_icon: pystray.Icon | None = None
@@ -729,41 +747,59 @@ class MyCompBot(tk.Tk):
         self._setup_tray()
 
     def _build(self) -> None:
-        frame = ttk.Frame(self, padding=18)
-        frame.grid(sticky="nsew")
-        self.columnconfigure(0, weight=1); self.rowconfigure(0, weight=1)
+        # Compact white settings panel with scrolling: all controls remain accessible
+        # on smaller screens without forcing an oversized 780px-high window.
+        container = ttk.Frame(self, style="MyComp.TFrame")
+        container.grid(row=0, column=0, sticky="nsew")
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(0, weight=1)
+        canvas = tk.Canvas(container, background="#ffffff", highlightthickness=0, borderwidth=0)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        frame = ttk.Frame(canvas, padding=(22, 20), style="MyComp.TFrame")
         frame.columnconfigure(1, weight=1)
-        ttk.Label(frame, text="MyComp Bot for Windows", font=("Segoe UI", 18, "bold")).grid(row=0, column=0, columnspan=3, sticky="w")
-        ttk.Label(frame, text="Local MCP engine. No hosted endpoint or shared credentials.").grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 16))
+        content = canvas.create_window((0, 0), window=frame, anchor="nw")
+        frame.bind("<Configure>", lambda event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(content, width=event.width))
+        def _scroll(event):
+            canvas.yview_scroll(-int(event.delta / 120), "units")
+        canvas.bind("<Enter>", lambda event: canvas.bind_all("<MouseWheel>", _scroll))
+        canvas.bind("<Leave>", lambda event: canvas.unbind_all("<MouseWheel>"))
+        ttk.Label(frame, text="MyComp Bot", style="MyComp.Title.TLabel").grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(frame, text="Desktop connection & automation settings", style="MyComp.TLabel").grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 16))
         for row, label, variable in ((2, "Your public HTTPS domain", self.domain), (3, "Your ChatGPT callback URI", self.callback), (4, "Allowed folders (comma separated)", self.roots)):
-            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=5)
-            ttk.Entry(frame, textvariable=variable).grid(row=row, column=1, columnspan=2, sticky="ew", padx=(12, 0), pady=5)
-        ttk.Label(frame, text="Permission profile").grid(row=5, column=0, sticky="w", pady=5)
-        ttk.Combobox(frame, textvariable=self.level, values=("normal", "elevated", "full"), state="readonly").grid(row=5, column=1, sticky="w", padx=(12, 0), pady=5)
-        ttk.Button(frame, text="Save & Restart", command=self._save_restart).grid(row=5, column=2, sticky="e", pady=5)
+            ttk.Label(frame, style="MyComp.TLabel", text=label).grid(row=row, column=0, sticky="w", pady=5)
+            ttk.Entry(frame, style="MyComp.TEntry", textvariable=variable).grid(row=row, column=1, columnspan=2, sticky="ew", padx=(12, 0), pady=5)
+        ttk.Label(frame, style="MyComp.TLabel", text="Permission profile").grid(row=5, column=0, sticky="w", pady=5)
+        ttk.Combobox(frame, style="MyComp.TCombobox", textvariable=self.level, values=("normal", "elevated", "full"), state="readonly").grid(row=5, column=1, sticky="w", padx=(12, 0), pady=5)
+        ttk.Button(frame, style="MyComp.TButton", text="Save & Restart", command=self._save_restart).grid(row=5, column=2, sticky="e", pady=5)
         ttk.Separator(frame).grid(row=6, column=0, columnspan=3, sticky="ew", pady=14)
-        ttk.Label(frame, text="Local service").grid(row=7, column=0, sticky="w")
-        ttk.Label(frame, textvariable=self.status).grid(row=7, column=1, sticky="w", padx=(12, 0))
-        ttk.Button(frame, text="Start", command=self._start).grid(row=7, column=2, sticky="e")
-        ttk.Button(frame, text="Stop", command=self._stop).grid(row=8, column=2, sticky="e", pady=(6, 0))
-        ttk.Label(frame, text="MCP endpoint").grid(row=9, column=0, sticky="nw", pady=(14, 0))
-        ttk.Label(frame, textvariable=self.endpoint, wraplength=470).grid(row=9, column=1, sticky="w", padx=(12, 0), pady=(14, 0))
-        ttk.Button(frame, text="Copy", command=self._copy_endpoint).grid(row=9, column=2, sticky="e", pady=(14, 0))
-        ttk.Button(frame, text="Start Free Temporary Tunnel", command=self._start_tunnel).grid(row=10, column=1, sticky="w", pady=(12, 0))
-        ttk.Button(frame, text="Stop Tunnel", command=self._stop_tunnel).grid(row=10, column=2, sticky="e", pady=(12, 0))
-        ttk.Button(frame, text="Open ChatGPT Plugins & Copy MCP URL", command=self._open_chatgpt_plugins).grid(row=11, column=1, sticky="w", pady=(12, 0))
-        ttk.Button(frame, text="Copy Owner Consent Code", command=self._copy_owner_consent_code).grid(row=11, column=2, sticky="e", pady=(12, 0))
-        ttk.Checkbutton(frame, text="Start MyComp Bot automatically when I sign in to Windows", variable=self.autostart, command=self._toggle_autostart).grid(row=12, column=0, columnspan=3, sticky="w", pady=(18, 0))
-        ttk.Checkbutton(frame, text="Start Remote Desktop Commander automatically with MyComp Bot", variable=self.remote_commander_autostart, command=self._toggle_remote_commander_autostart).grid(row=13, column=0, columnspan=3, sticky="w", pady=(8, 0))
-        ttk.Label(frame, text="Remote Desktop Commander").grid(row=14, column=0, sticky="w", pady=(8, 0))
-        ttk.Label(frame, textvariable=self.remote_commander_status).grid(row=14, column=1, columnspan=2, sticky="w", padx=(12, 0), pady=(8, 0))
-        ttk.Button(frame, text="Start Remote Desktop Commander now", command=lambda: self._start_remote_commander(manual=True)).grid(row=15, column=1, sticky="w", pady=(6, 0))
+        ttk.Label(frame, style="MyComp.TLabel", text="Local service").grid(row=7, column=0, sticky="w")
+        ttk.Label(frame, style="MyComp.TLabel", textvariable=self.status).grid(row=7, column=1, sticky="w", padx=(12, 0))
+        ttk.Button(frame, style="MyComp.TButton", text="Start", command=self._start).grid(row=7, column=2, sticky="e")
+        ttk.Button(frame, style="MyComp.TButton", text="Stop", command=self._stop).grid(row=8, column=2, sticky="e", pady=(6, 0))
+        ttk.Label(frame, style="MyComp.TLabel", text="MCP endpoint").grid(row=9, column=0, sticky="nw", pady=(14, 0))
+        ttk.Label(frame, style="MyComp.TLabel", textvariable=self.endpoint, wraplength=470).grid(row=9, column=1, sticky="w", padx=(12, 0), pady=(14, 0))
+        ttk.Button(frame, style="MyComp.TButton", text="Copy", command=self._copy_endpoint).grid(row=9, column=2, sticky="e", pady=(14, 0))
+        ttk.Button(frame, style="MyComp.TButton", text="Start Free Temporary Tunnel", command=self._start_tunnel).grid(row=10, column=1, sticky="w", pady=(12, 0))
+        ttk.Button(frame, style="MyComp.TButton", text="Stop Tunnel", command=self._stop_tunnel).grid(row=10, column=2, sticky="e", pady=(12, 0))
+        ttk.Button(frame, style="MyComp.TButton", text="Open ChatGPT Plugins & Copy MCP URL", command=self._open_chatgpt_plugins).grid(row=11, column=1, sticky="w", pady=(12, 0))
+        ttk.Button(frame, style="MyComp.TButton", text="Copy Owner Consent Code", command=self._copy_owner_consent_code).grid(row=11, column=2, sticky="e", pady=(12, 0))
+        ttk.Checkbutton(frame, style="MyComp.TCheckbutton", text="Start MyComp Bot automatically when I sign in to Windows", variable=self.autostart, command=self._toggle_autostart).grid(row=12, column=0, columnspan=3, sticky="w", pady=(18, 0))
+        ttk.Checkbutton(frame, style="MyComp.TCheckbutton", text="Start Remote Desktop Commander automatically with MyComp Bot", variable=self.remote_commander_autostart, command=self._toggle_remote_commander_autostart).grid(row=13, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        ttk.Label(frame, style="MyComp.TLabel", text="Remote Desktop Commander").grid(row=14, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(frame, style="MyComp.TLabel", textvariable=self.remote_commander_status).grid(row=14, column=1, columnspan=2, sticky="w", padx=(12, 0), pady=(8, 0))
+        ttk.Button(frame, style="MyComp.TButton", text="Start Remote Desktop Commander now", command=lambda: self._start_remote_commander(manual=True)).grid(row=15, column=1, sticky="w", pady=(6, 0))
 
-        ttk.Button(frame, text="Update MyComp Bot", command=self._request_update).grid(row=16, column=1, sticky="w", pady=(10, 0))
-        ttk.Button(frame, text="Repair Tailscale now", command=lambda: self._request_tailscale_check(manual=True)).grid(row=16, column=2, sticky="e", pady=(10, 0))
-        ttk.Label(frame, textvariable=self.update_status, wraplength=600).grid(row=17, column=0, columnspan=3, sticky="w", pady=(6, 0))
-        ttk.Label(frame, text="Mouse/keyboard actions require Elevated. Accessibility uses Windows UI Automation; screen capture uses native Win32 capture. OCR uses RapidOCR with ONNX Runtime. Tailscale provides the public HTTPS connection.", wraplength=700).grid(row=18, column=0, columnspan=3, sticky="w", pady=(12, 0))
-        ttk.Label(frame, textvariable=self.tailscale_status, wraplength=700).grid(row=19, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        ttk.Button(frame, style="MyComp.TButton", text="Update MyComp Bot", command=self._request_update).grid(row=16, column=1, sticky="w", pady=(10, 0))
+        ttk.Button(frame, style="MyComp.TButton", text="Repair Tailscale now", command=lambda: self._request_tailscale_check(manual=True)).grid(row=16, column=2, sticky="e", pady=(10, 0))
+        ttk.Label(frame, style="MyComp.TLabel", textvariable=self.update_status, wraplength=600).grid(row=17, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Label(frame, style="MyComp.TLabel", text="Mouse/keyboard actions require Elevated. Accessibility uses Windows UI Automation; screen capture uses native Win32 capture. OCR uses RapidOCR with ONNX Runtime. Tailscale provides the public HTTPS connection.", wraplength=700).grid(row=18, column=0, columnspan=3, sticky="w", pady=(12, 0))
+        ttk.Label(frame, style="MyComp.TLabel", textvariable=self.tailscale_status, wraplength=700).grid(row=19, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
     def _request_update(self) -> None:
         if self.update_busy:
