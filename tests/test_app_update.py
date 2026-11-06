@@ -209,6 +209,11 @@ class AppUpdateTests(unittest.TestCase):
             self.assertIn("MyComp Bot.lnk", command)
             self.assertIn("mycomp-bot.ico", command)
             self.assertIn("OrdinalIgnoreCase", command)
+            self.assertIn("$managedExe=", command)
+            self.assertIn("$ifManaged=", command)
+            self.assertIn("[char]34+$newScript+[char]34", command)
+            self.assertNotIn("$link.Arguments='"'+$newScript+'"'", command)
+
 
     def test_updater_creates_desktop_shortcut_only_when_missing(self):
         import base64
