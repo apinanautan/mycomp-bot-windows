@@ -15,7 +15,9 @@ class GuiEntryPointTests(unittest.TestCase):
         self.assertIn("self.after_idle(self._apply_native_window_icon)", GUI)
 
     def test_create_plugin_visible_without_opening_settings_dialog(self):
-        self.assertIn('text="สร้างปลั๊กอินใน ChatGPT (พร้อมพรอมต์)"', GUI)
+        self.assertEqual(GUI.count('text="สร้างปลั๊กอินใน ChatGPT"'), 1)
+        self.assertNotIn('text="พรอมต์สร้างปลั๊กอิน"', GUI)
+        self.assertEqual(GUI.count("launch_chatgpt=True"), 1)
         self.assertIn("launch_chatgpt=True", GUI)
         self.assertIn("viewer.clipboard_append(prompt)", GUI)
         self.assertIn("chatgpt.com/plugins/plugin_connector_1p_e1a10c53223481918a42f1510ec46c1e", GUI)

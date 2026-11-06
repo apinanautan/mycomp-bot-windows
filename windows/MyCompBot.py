@@ -697,11 +697,8 @@ class MyCompBot(tk.Tk):
                 messagebox.showerror("OpenAI Tunnel", "Could not save or start. Check Tunnel ID, API key, and installed tunnel-client.exe.", parent=window)
         ttk.Button(window, text="Save and connect", command=save).grid(row=3, column=0, padx=12, pady=8)
         ttk.Button(window, text="Test readiness", command=lambda: status.set(self.openai_tunnel.status())).grid(row=3, column=1, padx=12, pady=8)
-        ttk.Button(window, text="พรอมต์สร้างปลั๊กอิน", command=lambda: self._show_plugin_prompt(window)).grid(
-            row=4, column=0, columnspan=2, padx=12, pady=8
-        )
-        ttk.Label(window, textvariable=status, wraplength=650).grid(row=5, column=0, columnspan=2, padx=12, pady=8)
-        ttk.Label(window, text="Key is encrypted for this Windows user. Each new machine needs its own setup.", wraplength=650).grid(row=6, column=0, columnspan=2, padx=12, pady=8)
+        ttk.Label(window, textvariable=status, wraplength=650).grid(row=4, column=0, columnspan=2, padx=12, pady=8)
+        ttk.Label(window, text="Key is encrypted for this Windows user. Each new machine needs its own setup.", wraplength=650).grid(row=5, column=0, columnspan=2, padx=12, pady=8)
 
     def _openai_tunnel_tick(self):
         if not self._closing:
@@ -738,6 +735,9 @@ class MyCompBot(tk.Tk):
         self._native_window_icons = []
         self.after_idle(self._apply_native_window_icon)
         _refresh_existing_shortcut_icons()
+        # The updater can retarget shortcuts after the new window starts.
+        # Re-check the bundled icon once, after handoff completes.
+        self.after(3000, _refresh_existing_shortcut_icons)
         if __package__:
             from .openai_tunnel import Tunnel
         else:
@@ -852,7 +852,7 @@ class MyCompBot(tk.Tk):
             style="MyComp.TButton",
         ).grid(row=0, column=3, rowspan=2, sticky="e", padx=(4, 0))
         ttk.Button(
-            healthbar, text="สร้างปลั๊กอินใน ChatGPT (พร้อมพรอมต์)",
+            healthbar, text="สร้างปลั๊กอินใน ChatGPT",
             command=lambda: self._show_plugin_prompt(self, launch_chatgpt=True),
             style="MyComp.TButton",
         ).grid(row=3, column=0, columnspan=4, sticky="ew", pady=(9, 0))
@@ -891,7 +891,6 @@ class MyCompBot(tk.Tk):
         ttk.Button(frame, style="MyComp.TButton", text="Copy", command=self._copy_endpoint).grid(row=9, column=2, sticky="e", pady=(14, 0))
         ttk.Button(frame, style="MyComp.TButton", text="Start Free Temporary Tunnel", command=self._start_tunnel).grid(row=10, column=1, sticky="w", pady=(12, 0))
         ttk.Button(frame, style="MyComp.TButton", text="Stop Tunnel", command=self._stop_tunnel).grid(row=10, column=2, sticky="e", pady=(12, 0))
-        ttk.Button(frame, style="MyComp.TButton", text="สร้างปลั๊กอินใน ChatGPT", command=lambda: self._show_plugin_prompt(self, launch_chatgpt=True)).grid(row=11, column=1, sticky="w", pady=(12, 0))
         ttk.Button(frame, style="MyComp.TButton", text="Copy Owner Consent Code", command=self._copy_owner_consent_code).grid(row=11, column=2, sticky="e", pady=(12, 0))
         ttk.Checkbutton(frame, style="MyComp.TCheckbutton", text="Start MyComp Bot automatically when I sign in to Windows", variable=self.autostart, command=self._toggle_autostart).grid(row=12, column=0, columnspan=3, sticky="w", pady=(18, 0))
         ttk.Checkbutton(frame, style="MyComp.TCheckbutton", text="Start Remote Desktop Commander automatically with MyComp Bot", variable=self.remote_commander_autostart, command=self._toggle_remote_commander_autostart).grid(row=13, column=0, columnspan=3, sticky="w", pady=(8, 0))
@@ -1530,6 +1529,7 @@ class MyCompBot(tk.Tk):
         self.deiconify()
         self.lift()
         self.focus_force()
+        _refresh_existing_shortcut_icons()
         self._refresh_connection_status()
     def _quit(self) -> None:
         self.openai_tunnel.stop()
