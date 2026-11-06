@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.request
@@ -162,6 +163,120 @@ def apply_files(root: Path, source: Path, log, install=install_dependencies) -> 
         remove_temporary(backup, source.parent)
 
 
+def managed_release_root(source: Path, app_data: Path) -> Path:
+    """A versioned installation that never writes inside a Git checkout."""
+    source = source.resolve()
+    version = (source / "VERSION").read_text(encoding="utf-8").strip()
+    version_tuple(version)
+    target = app_data.resolve() / "versions" / f"v{version}"
+    if target == source or target in source.parents or source in target.parents:
+        raise ValueError("Managed installation must be outside update staging")
+    return target
+
+
+def install_managed_release(
+    source: Path, app_data: Path, base_python: Path, log,
+    *, install=install_dependencies,
+) -> Path:
+    """Install a new immutable app copy; never overlay the original source.
+
+    A completed copy can be reused. An incomplete destination is never
+    overwritten or silently deleted because it might contain user data.
+    """
+    source = source.resolve()
+    target = managed_release_root(source, app_data)
+    if target.exists():
+        if target.is_symlink() or not (target / ".mycomp-install-complete").is_file():
+            raise RuntimeError(f"Managed destination exists but is incomplete: {target}")
+        if not (target / ".venv/Scripts/pythonw.exe").is_file():
+            raise RuntimeError(f"Managed destination is missing its Python environment: {target}")
+        return target
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.parent.is_symlink() or not target.parent.resolve().is_relative_to(app_data.resolve()):
+        raise ValueError("Managed install directory escapes the app data folder")
+    for path in source.rglob("*"):
+        if path.is_symlink():
+            raise ValueError("Release source contains a symbolic link")
+        if path.is_file() and any(part in PROTECTED for part in path.relative_to(source).parts):
+            raise ValueError("Protected file inside release source")
+    try:
+        shutil.copytree(source, target)
+        subprocess.run(
+            [str(base_python), "-m", "venv", str(target / ".venv")],
+            check=True, stdout=log, stderr=subprocess.STDOUT, timeout=180,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        install(target, log)
+        if not (target / ".venv/Scripts/pythonw.exe").is_file():
+            raise RuntimeError("Managed app Python launcher was not installed")
+        (target / ".mycomp-install-complete").write_text(
+            (source / "VERSION").read_text(encoding="utf-8").strip(),
+            encoding="utf-8",
+        )
+        return target
+    except Exception:
+        # Only delete our new, private version directory, never the checkout.
+        if target.exists():
+            remove_temporary(target, target.parent)
+        raise
+
+
+def redirect_launchers(previous: Path, installed: Path, log) -> None:
+    """Update only MyComp shortcuts pointing at this old app installation."""
+    previous, installed = previous.resolve(), installed.resolve()
+    if previous == installed:
+        return
+    old_exe = str(previous / ".venv/Scripts/pythonw.exe")
+    old_script = str(previous / "windows/MyCompBot.py")
+    new_exe = str(installed / ".venv/Scripts/pythonw.exe")
+    new_script = str(installed / "windows/MyCompBot.py")
+    icon = str(installed / "windows/assets/mycomp-bot.ico")
+    def quote_ps(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+
+    ps = (
+        "$ErrorActionPreference='Stop';"
+        "$shell=New-Object -ComObject WScript.Shell;"
+        "$links=@("
+        "[IO.Path]::Combine([Environment]::GetFolderPath('Desktop'),'MyComp Bot.lnk'),"
+        "[IO.Path]::Combine([Environment]::GetFolderPath('Programs'),'MyComp Bot.lnk')"
+        ");"
+        f"$oldExe={quote_ps(old_exe)};$oldScript={quote_ps(old_script)};"
+        f"$newExe={quote_ps(new_exe)};$newScript={quote_ps(new_script)};"
+        f"$newRoot={quote_ps(str(installed))};$newIcon={quote_ps(icon)};"
+        "foreach($linkPath in $links){"
+        "if(-not (Test-Path -LiteralPath $linkPath)){continue};"
+        "$link=$shell.CreateShortcut($linkPath);"
+        "if($link.TargetPath -ine $oldExe -or "
+        "$link.Arguments.IndexOf($oldScript,[StringComparison]::OrdinalIgnoreCase) -lt 0){continue};"
+        "$link.TargetPath=$newExe;$link.Arguments='"'+$newScript+'"';"
+        "$link.WorkingDirectory=$newRoot;$link.IconLocation=$newIcon+',0';$link.Save()"
+        "}"
+    )
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+         __import__("base64").b64encode(ps.encode("utf-16le")).decode("ascii")],
+        capture_output=True, text=True, timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if result.returncode:
+        print(f"Shortcut migration warning: {result.stderr.strip()}", file=log, flush=True)
+
+    if os.name == "nt":
+        import winreg
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0,
+                                winreg.KEY_READ | winreg.KEY_SET_VALUE) as key:
+                current, kind = winreg.QueryValueEx(key, "MyComp Bot")
+                if kind == winreg.REG_SZ and old_exe.casefold() in current.casefold() and old_script.casefold() in current.casefold():
+                    new_command = subprocess.list2cmdline([new_exe, new_script])
+                    winreg.SetValueEx(key, "MyComp Bot", 0, winreg.REG_SZ, new_command)
+        except FileNotFoundError:
+            pass
+
+
 def wait_for_parent(pid: int) -> None:
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
@@ -192,33 +307,40 @@ def main() -> None:
     args.log.parent.mkdir(parents=True, exist_ok=True)
     running = False
     parent_exited = False
-    def install_and_restart(root: Path, log) -> None:
-        nonlocal running
-        install_dependencies(root, log)
-        process = restart(root)
-        for _ in range(60):
-            try:
-                with urllib.request.urlopen("http://127.0.0.1:8645/health", timeout=1) as response:
-                    health = json.load(response)
-                if process.poll() is None and health.get("status") == "ok" and health.get("service") == "mycomp-bot":
-                    running = True
-                    return
-            except Exception:
-                pass
-            if process.poll() is not None:
-                break
-            time.sleep(0.5)
-        if process.poll() is None:
-            subprocess.run(["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
-                           capture_output=True, timeout=15, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        raise RuntimeError("Updated app did not become healthy; restoring the previous files")
     with args.log.open("a", encoding="utf-8") as log:
         try:
+            # The user has already confirmed the update in the application.
+            # Never replace Git source files, even when the working tree is clean.
             wait_for_parent(args.parent_pid)
             parent_exited = True
-            print(f"Updating {args.root}", file=log, flush=True)
-            apply_files(args.root, args.source, log, install=install_and_restart)
-            print("Update installed successfully", file=log, flush=True)
+            destination = install_managed_release(
+                args.source, args.log.parent, Path(sys.executable), log,
+            )
+            print(f"Installed isolated app copy: {destination}", file=log, flush=True)
+            process = restart(destination)
+            for _ in range(60):
+                try:
+                    with urllib.request.urlopen("http://127.0.0.1:8645/health", timeout=1) as response:
+                        health = json.load(response)
+                    if process.poll() is None and health.get("status") == "ok" and health.get("service") == "mycomp-bot":
+                        running = True
+                        break
+                except Exception:
+                    pass
+                if process.poll() is not None:
+                    break
+                time.sleep(0.5)
+            if not running:
+                if process.poll() is None:
+                    subprocess.run(["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
+                                   capture_output=True, timeout=15,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                raise RuntimeError("Updated app did not become healthy; the original checkout was not modified")
+            try:
+                redirect_launchers(args.root, destination, log)
+            except Exception as warning:
+                print(f"Launcher migration warning: {warning}", file=log, flush=True)
+            print(f"Update installed successfully: {destination}", file=log, flush=True)
         except Exception as error:
             print(f"Update failed: {error}", file=log, flush=True)
             ctypes.windll.user32.MessageBoxW(None, f"Update failed: {error}\nLog: {args.log}", "MyComp Bot update", 0x10)

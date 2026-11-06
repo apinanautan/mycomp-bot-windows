@@ -11,6 +11,26 @@ PowerShell -ExecutionPolicy Bypass -File '.\windows\Run MyComp Bot.ps1'
 โปรดอย่า commit `.env`, OAuth token/callback, owner consent code, logs, `.venv` หรือ build output
 
 ตั้งแต่รุ่น 1.1.4 กด **Update MyComp Bot** ในหน้าต่างหรือเมนู tray เพื่ออัปเดตจาก GitHub Release ได้ โปรแกรมจะติดตั้งแล้วเปิดกลับเอง และเก็บการตั้งค่าเดิมไว้ รายละเอียดการอัปเดตอยู่ใน `%LOCALAPPDATA%\MyComp Bot\update.log`.
+## Release 1.1.10: one-click updates from dirty source checkouts
+
+Click **Update MyComp Bot** in the main window or system tray, approve the
+version prompt, and let MyComp Bot download the release itself. Even when the
+currently running copy is a Git checkout with local changes, the updater now
+installs a **separate versioned app copy** under
+`%LOCALAPPDATA%\\MyComp Bot\\versions\\vX.Y.Z`, creates its Python
+virtual environment and installs locked dependencies there. It never writes
+release files over the source checkout or removes its uncommitted changes.
+The update helper runs only after user confirmation, waits for the old app to
+exit, starts the newly installed app, checks its health, and retargets matching
+MyComp Bot shortcuts and auto-start to the managed install. Existing user
+settings remain in `%LOCALAPPDATA%\\MyComp Bot`; previous versions remain
+available for recovery. A failure leaves the source checkout intact.
+
+**Bootstrap note:** a previously running v1.1.9 instance still has its old
+updater loaded; close and reopen it manually once after pulling this fix, or
+launch the new v1.1.10 installation once. Subsequent releases update using
+this new one-click flow. Do not bypass the old updater's dirty-check guard.
+
 ## Release 1.1.9: named dual-transport plugin prompt
 
 In **OpenAI Tunnel**, click **พรอมต์สร้างปลั๊กอิน**. The app first asks

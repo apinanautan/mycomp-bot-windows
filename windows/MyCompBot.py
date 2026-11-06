@@ -778,7 +778,8 @@ class MyCompBot(tk.Tk):
             if app_update.version_tuple(release["tag"]) <= app_update.version_tuple(APP_VERSION):
                 self.update_queue.put(("current", release["tag"]))
             else:
-                app_update.check_checkout(ROOT)
+                # A dirty source checkout is never an update destination. The
+                # external updater installs the release into a managed app copy.
                 self.update_queue.put(("available", release))
         except Exception as error:
             self.update_queue.put(("error", str(error)))
@@ -799,7 +800,7 @@ class MyCompBot(tk.Tk):
                     self.update_status.set(f"Version {APP_VERSION} — up to date")
                     messagebox.showinfo("MyComp Bot update", f"MyComp Bot {APP_VERSION} is up to date.")
                 elif event == "available":
-                    if messagebox.askyesno("MyComp Bot update", f"Install {value['tag']}? MyComp Bot will close and reopen after updating. Your settings will be kept."):
+                    if messagebox.askyesno("MyComp Bot update", f"Install {value['tag']} automatically?\n\nMyComp Bot will download the release, create a separate managed app copy, then close and reopen the app. Your Git checkout and local changes will not be overwritten. Existing user settings are kept."):
                         self.update_status.set(f"Downloading {value['tag']}...")
                         threading.Thread(target=self._prepare_update_worker, args=(value,), daemon=True).start()
                     else:
