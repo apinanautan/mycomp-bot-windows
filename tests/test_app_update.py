@@ -221,6 +221,39 @@ class AppUpdateTests(unittest.TestCase):
         self.assertEqual(kind, "available")
         self.assertEqual(data["tag"], "v1.1.10")
 
+    def test_same_version_checkout_offers_safe_managed_install(self):
+        import queue
+        from windows import MyCompBot as gui
+        with tempfile.TemporaryDirectory() as directory:
+            checkout = Path(directory) / "source"
+            checkout.mkdir()
+            (checkout / ".git").mkdir()
+            bot = object.__new__(gui.MyCompBot)
+            bot.update_queue = queue.Queue()
+            with patch.object(gui, "ROOT", checkout), patch.object(gui, "APP_VERSION", "1.1.11"), \
+                 patch.object(gui.app_update, "latest_release", return_value={
+                     "tag": "v1.1.11", "url": "https://example.test/release.zip",
+                 }):
+                gui.MyCompBot._check_update_worker(bot)
+            event, release = bot.update_queue.get_nowait()
+            self.assertEqual(event, "migrate")
+            self.assertEqual(release["tag"], "v1.1.11")
+
+    def test_same_version_managed_install_remains_current(self):
+        import queue
+        from windows import MyCompBot as gui
+        with tempfile.TemporaryDirectory() as directory:
+            bot = object.__new__(gui.MyCompBot)
+            bot.update_queue = queue.Queue()
+            with patch.object(gui, "ROOT", Path(directory)), \
+                 patch.object(gui, "APP_VERSION", "1.1.11"), \
+                 patch.object(gui.app_update, "latest_release", return_value={
+                     "tag": "v1.1.11", "url": "https://example.test/release.zip",
+                 }):
+                gui.MyCompBot._check_update_worker(bot)
+            event, tag = bot.update_queue.get_nowait()
+            self.assertEqual((event, tag), ("current", "v1.1.11"))
+
     def test_handoff_installs_managed_copy_only_after_parent_exit(self):
         import json
         with tempfile.TemporaryDirectory() as directory:

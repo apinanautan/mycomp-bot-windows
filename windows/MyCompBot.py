@@ -775,7 +775,13 @@ class MyCompBot(tk.Tk):
     def _check_update_worker(self) -> None:
         try:
             release = app_update.latest_release()
-            if app_update.version_tuple(release["tag"]) <= app_update.version_tuple(APP_VERSION):
+            newest = app_update.version_tuple(release["tag"])
+            installed = app_update.version_tuple(APP_VERSION)
+            if newest == installed and (ROOT / ".git").is_dir():
+                # Even without a newer release, move a source checkout into a
+                # managed app install so future one-click updates work safely.
+                self.update_queue.put(("migrate", release))
+            elif newest <= installed:
                 self.update_queue.put(("current", release["tag"]))
             else:
                 # A dirty source checkout is never an update destination. The
@@ -799,8 +805,19 @@ class MyCompBot(tk.Tk):
                     self.update_busy = False
                     self.update_status.set(f"Version {APP_VERSION} — up to date")
                     messagebox.showinfo("MyComp Bot update", f"MyComp Bot {APP_VERSION} is up to date.")
-                elif event == "available":
-                    if messagebox.askyesno("MyComp Bot update", f"Install {value['tag']} automatically?\n\nMyComp Bot will download the release, create a separate managed app copy, then close and reopen the app. Your Git checkout and local changes will not be overwritten. Existing user settings are kept."):
+                elif event in ("available", "migrate"):
+                    same_release = event == "migrate"
+                    prompt = (
+                        f"MyComp Bot {value['tag']} is already the latest release.\n\n"
+                        "Install a separate managed app copy now? Future updates will "
+                        "work without touching this Git checkout."
+                        if same_release else f"Install {value['tag']} automatically?"
+                    )
+                    prompt += ("\n\nMyComp Bot will download the release, create a separate "
+                               "managed app copy, then close and reopen the app. Your Git "
+                               "checkout and local changes will not be overwritten. "
+                               "Existing user settings are kept.")
+                    if messagebox.askyesno("MyComp Bot update", prompt):
                         self.update_status.set(f"Downloading {value['tag']}...")
                         threading.Thread(target=self._prepare_update_worker, args=(value,), daemon=True).start()
                     else:
