@@ -16,3 +16,8 @@ Use across the three MyComp Bot channels: Tailscale MCP, OpenAI Secure MCP Tunne
 7. **Report evidence.** If asked which is fastest, show task type, sample count, observed latency, success rate, and any untested path. Never declare a global winner based on guesses.
 
 Transport latency is not model inference or code quality. Skill documents advise tool selection; they cannot intercept tool calls or grant permissions. Use development-loop and ponytail alongside this skill.
+
+## Channel identity and priority
+- Prefer Secure MCP Tunnel after a real authenticated ChatGPT tool call through that exact plugin. Local health and low latency are not sufficient evidence.
+- If the named Tunnel plugin is missing or blocked by account/workspace policy, retain the working Tailscale channel for independent tasks. Never label a Tailscale result as Tunnel success.
+- Recheck host identity whenever switching channels or machines. Read operator-clarity first.

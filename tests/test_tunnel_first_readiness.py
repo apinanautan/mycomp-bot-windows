@@ -27,6 +27,15 @@ class TunnelFirstReadinessTests(unittest.TestCase):
                 self.assertIn(phrase, prompt)
             self.assertLess(prompt.index("STEP 1"), prompt.index("STEP 2"))
 
+    def test_prompt_continues_independent_work_when_chatgpt_mcp_blocked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tunnel = Tunnel(Path(directory))
+            prompt = tunnel.plugin_prompt("MyComp BotS", "https://example.ts.net/mycomp")
+            for phrase in ("blocked_permission", "operator-clarity", "ข้ามเฉพาะการผูก Tunnel",
+                           "ผ่าน Tailscale", "MyComp BotS Tunnel", "MyComp BotS Tailscale"):
+                self.assertIn(phrase, prompt)
+            self.assertNotIn("ไม่ข้ามไปทำงานอื่นก่อน Tunnel สำเร็จ", prompt)
+
     def test_status_distinguishes_auth_required_from_authenticated(self):
         with tempfile.TemporaryDirectory() as directory:
             tunnel = Tunnel(Path(directory))

@@ -1,12 +1,13 @@
 # MyComp Bot portable skills
 
-The single source of truth for all MyComp Bot plugin copies is this GitHub repository. Add the same five skill files to every owned/editable MyComp transport plugin: Tailscale, Tunnel, and Remote Desktop Commander.
+The single source of truth for all MyComp Bot plugin copies is this GitHub repository. Add the same six skill files to every owned/editable MyComp transport plugin: Tailscale, Tunnel, and Remote Desktop Commander.
 
 - development-loop: inspect, edit minimally, test, review, and record outcome.
 - ponytail: prefer the simplest correct complete implementation.
 - agent-desktop-portable: safely operate desktop UI via an actually connected CLI.
 - connection-recovery: verify a failing route, repair safely, record reusable evidence in PLAYBOOK.md.
 - tool-routing: choose the fastest eligible and healthy tool for each type of work, based on observed successful calls, not a permanent rank.
+- operator-clarity: preserve exact machine, plugin names, scope and evidence; skip completed work and continue independent tasks when a connector is blocked.
 
 Copy support files: ponytail/LICENSE and connection-recovery/PLAYBOOK.md. Do not blindly run any third-party installer or lifecycle hook.
 

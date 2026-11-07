@@ -1,3 +1,14 @@
+## Operator clarity and channel verification
+
+The operator-clarity skill is bundled with MyComp Bot. It requires exact machine
+identity, prevents modifications to unrelated Studio/Orchestrator plugins, and
+continues independent setup tasks even when the ChatGPT account/workspace
+denies custom MCP attachment. Existing Tunnel ID, DPAPI API key and main
+channel are retained when available. Health checks are not proof of
+authenticated ChatGPT tools/list. A working Tailscale fallback is not
+misreported as a working Tunnel plugin. No skill can unlock account
+entitlements; verify availability from the specific workspace and error.
+
 ## Version 1.1.26 — Tunnel-first setup and visible browser workspace
 
 The MyComp Bot setup prompt first checks the existing saved Secure MCP Tunnel ID,

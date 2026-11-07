@@ -40,6 +40,17 @@ class BundledSkillTests(unittest.TestCase):
         self.assertIn("tools/list", recovery)
         self.assertTrue((ROOT / "skills/connection-recovery/PLAYBOOK.md").is_file())
 
+    def test_operator_clarity_skill_prevents_target_and_entitlement_confusion(self):
+        doc = (ROOT / "skills/operator-clarity/SKILL.md").read_text(encoding="utf-8")
+        self.assertTrue(doc.startswith("---\nname: operator-clarity\n"))
+        for word in ("machine A", "machine B", "Tidmunz Studio", "Tailscale",
+                     "authenticated ChatGPT tools/list", "blocked_permission",
+                     "continue independent", "scope"):
+            with self.subTest(word=word):
+                self.assertIn(word, doc)
+        self.assertIn("operator-clarity", (ROOT / "skills/README.md").read_text(encoding="utf-8"))
+        self.assertIn("operator-clarity", (ROOT / "AGENTS.md").read_text(encoding="utf-8"))
+
     def test_repo_instructions_reference_both(self):
         text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         self.assertIn("skills/development-loop/SKILL.md", text)

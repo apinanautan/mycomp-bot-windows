@@ -23,3 +23,9 @@ Use with development-loop, ponytail, tool-routing, and agent-desktop-portable. T
 5. If plugin ownership or its skill support is missing, keep the skill in MyComp Bot GitHub and in future creation prompts; report that boundary rather than claiming sync.
 
 Unattended/scheduled checks default to report-only. This skill does not create a schedule.
+
+## Platform entitlement vs transport
+- Distinguish four stages: Windows Tunnel runtime healthy; main channel enabled; Custom MCP plugin permitted to the current ChatGPT account/workspace; authenticated tools/list plus one safe ChatGPT call successful.
+- If policy prevents plugin binding, reinstalling Windows Tunnel or regenerating encrypted keys cannot change plan entitlements. Preserve the configured Tunnel; mark the precise blocker and continue unrelated work through Tailscale.
+- Ground entitlement findings in official current documentation and the actual account UI/error. Never infer the user's plan from a computer or a pasted report.
+- An unavailable Tunnel must not halt independent GUI layout, plugin name inventory, skills, assets or tests. Consult operator-clarity.

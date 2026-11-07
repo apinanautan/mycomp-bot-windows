@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mycomp-bot-engine"
-version = "1.1.26"
+version = "1.1.27"
 description = "Local, policy-controlled MCP engine for MyComp Bot"
 requires-python = ">=3.11"
 dependencies = [
