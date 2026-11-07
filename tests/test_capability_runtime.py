@@ -5,11 +5,31 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from mycomp_bot_engine.capabilities import CapabilityRegistry
+from mycomp_bot_engine.capabilities import CapabilityRegistry, _capability_process_environment
 from mycomp_bot_engine.database import Database
 
 
 class CapabilityRuntimeTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows socket provider regression")
+    def test_isolated_capability_can_initialize_windows_socket(self):
+        source = b"""import socket
+def execute(payload):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM):
+        return {"winsock": "ok"}
+def self_test(): return True
+"""
+        self.assertEqual(CapabilityRegistry._run(source, "winsock_probe", "execute", {}),
+                         {"winsock": "ok"})
+
+    def test_capability_environment_does_not_expose_unrelated_secrets(self):
+        with patch.dict(os.environ, {"MYCOMP_SECRET_TEST_TOKEN": "never-pass", "OPENAI_API_KEY": "secret-value"}):
+            env = _capability_process_environment()
+        self.assertNotIn("MYCOMP_SECRET_TEST_TOKEN", env)
+        self.assertNotIn("OPENAI_API_KEY", env)
+        if os.name == "nt":
+            self.assertTrue(env.get("SystemRoot"))
+            self.assertTrue(env.get("USERPROFILE"))
+
     def test_upsert_install_upgrade_and_failed_upgrade_is_atomic(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

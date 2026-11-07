@@ -87,6 +87,33 @@ def _read_bounded(stream: Any, output: bytearray, exceeded: threading.Event) -> 
         stream.close()
 
 
+def _capability_process_environment() -> dict[str, str]:
+    """Minimal child environment; keep Windows OS loader and Winsock functional."""
+    environment = {
+        "PATH": os.getenv("PATH", ""),
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "HOME": str(Path.home()),
+    }
+    if os.name == "nt":
+        environment["USERPROFILE"] = str(Path.home())
+        # Windows socket providers require SystemRoot. Never forward the full
+        # parent environment (it can contain API keys, OAuth tokens or proxies).
+        for key in ("SystemRoot", "WINDIR", "TEMP", "TMP", "APPDATA",
+                    "LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+            value = os.environ.get(key)
+            if value:
+                environment[key] = value
+        if "SystemRoot" not in environment:
+            # The parent may also have been launched with a scrubbed environment.
+            import ctypes
+            directory = ctypes.create_unicode_buffer(32768)
+            if not ctypes.windll.kernel32.GetWindowsDirectoryW(directory, len(directory)):
+                raise OSError("Windows directory unavailable for capability process")
+            environment["SystemRoot"] = directory.value
+    return environment
+
+
 class CapabilityRegistry:
     """Capability registry with immutable, tested active versions."""
     def __init__(self, directory: Path, database: Database, allowed_roots: tuple[Path, ...] = (), protected_paths: tuple[Path, ...] = ()) -> None:
@@ -273,9 +300,7 @@ class CapabilityRegistry:
         runner = """import json,sys\ns={};exec(compile(open(sys.argv[1],'rb').read(),sys.argv[1],'exec'),s)\na=sys.argv[2]\nr=s['self_test']() if a=='test' else s['execute'](json.loads(sys.stdin.read()))\nprint(json.dumps(r))\n"""
         with tempfile.TemporaryDirectory(prefix="mycomp-cap-") as temp:
             path = Path(temp) / f"{name}.py"; path.write_bytes(source); os.chmod(path, 0o600)
-            environment = {"PATH": os.getenv("PATH", ""), "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1", "HOME": str(Path.home())}
-            if os.name == "nt":
-                environment["USERPROFILE"] = str(Path.home())
+            environment = _capability_process_environment()
             process = subprocess.Popen([sys.executable, "-B", "-I", "-c", runner, str(path), action], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=temp, env=environment, start_new_session=os.name != "nt", creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW) if os.name == "nt" else 0)
             if process_callback is not None: process_callback(process)
             stdout = bytearray()

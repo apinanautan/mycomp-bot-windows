@@ -1,3 +1,18 @@
+## Version 1.1.28 — Windows Capability Winsock hotfix
+
+Fixed the sanitized Python subprocess environment used by MyComp Bot
+capabilities. Windows needs SystemRoot and selected Windows OS paths to
+initialize socket providers; previously these were absent and Chrome CDP
+could fail with WinError 10106 even when Chrome and Tailscale were healthy.
+
+The fix preserves the minimal environment allowlist and does not forward
+API keys or OAuth tokens to capability subprocesses. Tests cover real
+socket initialization inside that sandbox-like runner and secret exclusion.
+
+This code fix does not change ChatGPT workspace Custom MCP entitlements.
+A private Plugin Creator package update is distinct from installing or
+enabling that plugin in ChatGPT's active workspace.
+
 ## Operator clarity and channel verification
 
 The operator-clarity skill is bundled with MyComp Bot. It requires exact machine

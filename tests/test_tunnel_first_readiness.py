@@ -36,6 +36,14 @@ class TunnelFirstReadinessTests(unittest.TestCase):
                 self.assertIn(phrase, prompt)
             self.assertNotIn("ไม่ข้ามไปทำงานอื่นก่อน Tunnel สำเร็จ", prompt)
 
+    def test_prompt_distinguishes_private_plugin_package_from_installed_plugin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tunnel = Tunnel(Path(directory))
+            prompt = tunnel.plugin_prompt("MyComp Bot", "https://example.ts.net/mycomp")
+            self.assertIn("Plugin Creator", prompt)
+            self.assertIn("Installed Plugins", prompt)
+            self.assertIn("Private Plugin", prompt)
+
     def test_status_distinguishes_auth_required_from_authenticated(self):
         with tempfile.TemporaryDirectory() as directory:
             tunnel = Tunnel(Path(directory))
