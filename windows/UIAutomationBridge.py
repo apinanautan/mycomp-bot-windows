@@ -62,6 +62,18 @@ def main(req):
     if action in ("focus","activate_app"): t.set_focus(); return {"backend":"pywinauto-uia","element":elem(t)}
     if action in ("click","menu_select"): t.click_input(); return {"backend":"pywinauto-uia","invoked":True,"method":"click_input","element":elem(t)}
     if action=="set_value": t.set_edit_text(str(req.get("value",""))); return {"backend":"pywinauto-uia","value_set":True,"element":elem(t)}
+    if action=="set_window_frame":
+        # Explicitly selected window only; no coordinate-based fallback.
+        if not any(k in sel for k in ("handle", "process_id", "pid", "name", "name_contains", "app_name")):
+            raise ValueError("set_window_frame requires an explicit window selector")
+        frame=req.get("frame") or req.get("bounds") or {}
+        if not isinstance(frame,dict) or not all(k in frame for k in ("x","y","width","height")):
+            raise ValueError("set_window_frame requires frame with x, y, width, height")
+        x,y,width,height=(int(frame[k]) for k in ("x","y","width","height"))
+        if width < 100 or height < 100 or width > 16384 or height > 16384:
+            raise ValueError("invalid window dimensions")
+        t.move_window(x,y,width,height,repaint=True)
+        return {"backend":"pywinauto-uia","action":action,"element":elem(t)}
     if action=="close_window": t.close(); return {"backend":"pywinauto-uia","action":action}
     if action=="minimize_window": t.minimize(); return {"backend":"pywinauto-uia","action":action}
     raise RuntimeError(f"Unsupported action: {action}")

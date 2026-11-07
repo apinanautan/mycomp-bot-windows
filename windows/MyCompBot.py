@@ -19,6 +19,7 @@ import os
 import queue
 import secrets
 import shutil
+import socket
 import struct
 import subprocess
 import sys
@@ -39,9 +40,10 @@ import pystray
 from PIL import Image, ImageDraw, ImageTk
 
 if __package__:
-    from . import app_update
+    from . import app_update, remote_commander_presence
 else:
     import app_update
+    import remote_commander_presence
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -275,21 +277,10 @@ def _repair_mycomp_funnel() -> None:
 
 
 def _remote_commander_pid() -> int | None:
-    script = (
-        '$n="@"+"wonderwhy-er"+"/"+"desktop-commander"; '
-        '$p=Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and '
-        '$_.CommandLine.Contains($n) -and $_.CommandLine.Contains("remote") } | '
-        'Select-Object -First 1 -ExpandProperty ProcessId; if($p){$p}'
-    )
-    result = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-        capture_output=True, text=True, timeout=10,
-        creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
-    )
-    if result.returncode:
-        raise RuntimeError(result.stderr.strip() or "Could not check for an existing Remote Desktop Commander agent")
-    value = result.stdout.strip()
-    return int(value.splitlines()[-1]) if value else None
+    """Select an actual local Node remote agent, never an npx wrapper."""
+    pids = remote_commander_presence.remote_agent_pids()
+    return pids[0] if pids else None
+
 
 
 def _defaults() -> dict[str, str]:
@@ -591,7 +582,8 @@ class MyCompBot(tk.Tk):
     def _show_plugin_prompt(self, parent: tk.Misc, launch_chatgpt: bool = False) -> None:
         name = simpledialog.askstring(
             "ตั้งชื่อปลั๊กอิน",
-            "ต้องการตั้งชื่อปลั๊กอินใหม่ว่าอะไร?",
+            "ชื่อหลักปลั๊กอิน (เชื่อม Tailscale ด้วยตัวเองแล้ว):",
+            initialvalue=socket.gethostname(),
             parent=parent,
         )
         if name is None:
@@ -603,19 +595,19 @@ class MyCompBot(tk.Tk):
         except (ValueError, OSError, TypeError, KeyError) as error:
             messagebox.showwarning(
                 "ตั้งค่าปลั๊กอิน",
-                f"กรุณาบันทึกชื่อ, Tunnel ID และ Tailscale HTTPS URL ที่ถูกต้องก่อนสร้างพรอมต์\n{error}",
+                f"กรุณาตรวจชื่อเครื่อง ชื่อปลั๊กอิน หรือค่าเชื่อมต่อที่บันทึกไว้\n{error}",
                 parent=parent,
             )
             return
         viewer = tk.Toplevel(parent)
-        viewer.title(f"สร้างปลั๊กอิน: {name.strip()} Tailscale / {name.strip()} Tunnel")
+        viewer.title(f"พรอมต์ตั้งค่า MyComp Bot สำหรับ {socket.gethostname()}: {name.strip()}")
         viewer.geometry("820x570")
         viewer.columnconfigure(0, weight=1)
         viewer.rowconfigure(1, weight=1)
         instructions = (
-            "พรอมต์พร้อมแล้ว: เปิด Plugin Creator ใน ChatGPT แล้วกด Ctrl+V "
-            "เพื่อวางคำสั่งสร้างปลั๊กอิน 2 ตัว จากนั้นตรวจสอบและส่งข้อความ "
-            "(ไม่ต้องกรอก API key)"
+            "เชื่อม Tailscale กับ ChatGPT ด้วยตัวเองก่อน จากนั้นคัดลอกพรอมต์นี้ไปส่งให้ ChatGPT "
+            "เพื่อตรวจของเดิมและติดตั้ง Tunnel/Channel, Remote Desktop Commander, Skills "
+            "และไอคอนที่ยังขาดจนเสร็จ (ไม่ต้องใส่ API key ในแชท)"
         )
         ttk.Label(viewer, text=instructions, wraplength=770, justify="left").grid(
             row=0, column=0, columnspan=2, padx=12, pady=(12, 4), sticky="w"
@@ -638,13 +630,13 @@ class MyCompBot(tk.Tk):
             # Use the known public Plugin Creator page, not an undocumented
             # query-string prompt that might auto-send or leak the Tunnel ID.
             webbrowser.open(
-                "https://chatgpt.com/plugins/plugin_connector_1p_e1a10c53223481918a42f1510ec46c1e"
+                "https://chatgpt.com/"
             )
 
         actions = ttk.Frame(viewer)
         actions.grid(row=2, column=0, columnspan=2, padx=12, pady=(2, 12), sticky="e")
         ttk.Button(actions, text="คัดลอกพรอมต์", command=copy_prompt).pack(side="left", padx=5)
-        ttk.Button(actions, text="เปิด ChatGPT Plugin Creator", command=open_creator).pack(
+        ttk.Button(actions, text="เปิด ChatGPT", command=open_creator).pack(
             side="left", padx=5
         )
         copy_prompt()
@@ -684,21 +676,103 @@ class MyCompBot(tk.Tk):
         saved_key_label.bind("<Button-1>", lambda event: key_entry.focus_set())
         update_saved_key_indicator()
         ttk.Checkbutton(window, text="Connect automatically while MyComp is running", variable=enabled).grid(row=2, column=0, columnspan=2, padx=12, pady=8)
+        profile_name = tk.StringVar(value=self.openai_tunnel.active_profile_name or "")
+
         def save():
             nonlocal key_saved
             try:
-                self.openai_tunnel.save(tunnel_id.get(), key.get(), enabled.get())
+                name = profile_name.get().strip()
+                if name:
+                    info = self.openai_tunnel.save_profile(name, tunnel_id.get(), key.get())
+                    if enabled.get():
+                        self.openai_tunnel.activate_profile(name)
+                    key_saved = info["has_api_key"]
+                elif self.openai_tunnel.active_profile_name:
+                    raise ValueError("Select the active named profile before editing.")
+                else:
+                    self.openai_tunnel.save(tunnel_id.get(), key.get(), enabled.get())
+                    key_saved = self.openai_tunnel.secret.is_file()
                 key.set("")
-                key_saved = self.openai_tunnel.secret.is_file()
                 update_saved_key_indicator()
                 self.openai_tunnel.tick()
                 status.set(self.openai_tunnel.status())
-            except (OSError, ValueError, KeyError):
-                messagebox.showerror("OpenAI Tunnel", "Could not save or start. Check Tunnel ID, API key, and installed tunnel-client.exe.", parent=window)
+            except (OSError, ValueError, KeyError) as error:
+                messagebox.showerror(
+                    "OpenAI Tunnel", "Could not save/activate profile: " + str(error),
+                    parent=window,
+                )
         ttk.Button(window, text="Save and connect", command=save).grid(row=3, column=0, padx=12, pady=8)
         ttk.Button(window, text="Test readiness", command=lambda: status.set(self.openai_tunnel.status())).grid(row=3, column=1, padx=12, pady=8)
         ttk.Label(window, textvariable=status, wraplength=650).grid(row=4, column=0, columnspan=2, padx=12, pady=8)
         ttk.Label(window, text="Key is encrypted for this Windows user. Each new machine needs its own setup.", wraplength=650).grid(row=5, column=0, columnspan=2, padx=12, pady=8)
+
+        # Named profiles are stored on this Windows PC, separately from the
+        # already working legacy Tunnel ID and encrypted credential.
+        ttk.Label(window, text="Named Tunnel profile").grid(
+            row=6, column=0, padx=12, pady=(14, 8), sticky="w"
+        )
+        profile_box = ttk.Combobox(
+            window, textvariable=profile_name,
+            values=self.openai_tunnel.list_profiles(), width=44,
+        )
+        profile_box.grid(row=6, column=1, padx=12, pady=(14, 8), sticky="ew")
+
+        def load_profile_fields(event=None):
+            nonlocal key_saved
+            name = profile_name.get().strip()
+            if not name:
+                return
+            try:
+                info = self.openai_tunnel.profile_info(name)
+                tunnel_id.set(info["tunnel_id"])
+                key.set("")
+                key_saved = info["has_api_key"]
+                enabled.set(info["active"])
+                update_saved_key_indicator()
+                status.set(
+                    "Saved on this computer: " + name
+                    + (" | encrypted key saved" if key_saved else " | runtime key needed")
+                    + (" | ACTIVE" if info["active"] else " | other active Tunnel preserved")
+                )
+            except (OSError, KeyError, ValueError):
+                status.set("Profile not yet saved; enter the official Tunnel ID.")
+
+        profile_box.bind("<<ComboboxSelected>>", load_profile_fields)
+
+        def save_named_profile():
+            nonlocal key_saved
+            try:
+                info = self.openai_tunnel.save_profile(
+                    profile_name.get().strip(), tunnel_id.get(), key.get()
+                )
+                key.set("")
+                key_saved = info["has_api_key"]
+                profile_box.configure(values=self.openai_tunnel.list_profiles())
+                update_saved_key_indicator()
+                status.set(
+                    "Saved profile " + info["name"] + " on this PC. "
+                    + ("Runtime key encrypted. " if key_saved else "Runtime key required. ")
+                    + "Existing Tunnel not changed."
+                )
+            except (OSError, KeyError, ValueError) as error:
+                messagebox.showerror("Save named Tunnel", str(error), parent=window)
+
+        actions = ttk.Frame(window)
+        actions.grid(row=7, column=1, padx=12, pady=6, sticky="w")
+        ttk.Button(actions, text="Load selected", command=load_profile_fields).pack(side="left", padx=(0, 8))
+        ttk.Button(
+            actions, text="Save named ID/key (keep active Tunnel)",
+            command=save_named_profile,
+        ).pack(side="left")
+        ttk.Label(
+            window,
+            text="Select Dino to load its stored ID. Enter a new runtime API key in the field above. "
+                 "Save named profile to keep it without changing the existing connection. "
+                 "Check Connect automatically and choose Save and connect to activate only when ready.",
+            wraplength=630,
+        ).grid(row=8, column=0, columnspan=2, padx=12, pady=8)
+        if self.openai_tunnel.active_profile_name:
+            load_profile_fields()
 
     def _openai_tunnel_tick(self):
         if not self._closing:
@@ -792,6 +866,9 @@ class MyCompBot(tk.Tk):
         self.remote_commander_autostart_enabled = True
         self.remote_commander_pid: int | None = None
         self.remote_commander_status = tk.StringVar(value="Not started")
+        self.remote_account_queue: queue.Queue[tuple[tuple[int, ...], remote_commander_presence.AccountHint]] = queue.Queue()
+        self.remote_account_probe_pending = False
+        self.remote_account_probe_next = 0.0
         self.update_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.update_busy = False
         self._closing = False
@@ -856,8 +933,8 @@ class MyCompBot(tk.Tk):
             style="MyComp.TButton",
         ).grid(row=0, column=3, rowspan=2, sticky="e", padx=(4, 0))
         ttk.Button(
-            healthbar, text="สร้างปลั๊กอินใน ChatGPT",
-            command=lambda: self._show_plugin_prompt(self, launch_chatgpt=True),
+            healthbar, text="สร้างพรอมต์ตั้งค่า MyComp Bot",
+            command=lambda: self._show_plugin_prompt(self, launch_chatgpt=False),
             style="MyComp.TButton",
         ).grid(row=3, column=0, columnspan=4, sticky="ew", pady=(9, 0))
         ttk.Label(
@@ -898,15 +975,46 @@ class MyCompBot(tk.Tk):
         ttk.Button(frame, style="MyComp.TButton", text="Copy Owner Consent Code", command=self._copy_owner_consent_code).grid(row=11, column=2, sticky="e", pady=(12, 0))
         ttk.Checkbutton(frame, style="MyComp.TCheckbutton", text="Start MyComp Bot automatically when I sign in to Windows", variable=self.autostart, command=self._toggle_autostart).grid(row=12, column=0, columnspan=3, sticky="w", pady=(18, 0))
         ttk.Checkbutton(frame, style="MyComp.TCheckbutton", text="Start Remote Desktop Commander automatically with MyComp Bot", variable=self.remote_commander_autostart, command=self._toggle_remote_commander_autostart).grid(row=13, column=0, columnspan=3, sticky="w", pady=(8, 0))
-        ttk.Label(frame, style="MyComp.TLabel", text="Remote Desktop Commander").grid(row=14, column=0, sticky="w", pady=(8, 0))
-        ttk.Label(frame, style="MyComp.TLabel", textvariable=self.remote_commander_status).grid(row=14, column=1, columnspan=2, sticky="w", padx=(12, 0), pady=(8, 0))
-        ttk.Button(frame, style="MyComp.TButton", text="Start Remote Desktop Commander now", command=lambda: self._start_remote_commander(manual=True)).grid(row=15, column=1, sticky="w", pady=(6, 0))
+        ttk.Label(frame, style="MyComp.TLabel", text="Remote Desktop Commander").grid(row=14, column=0, sticky="w", pady=(10, 0))
+        ttk.Button(
+            frame, text="Start / Check Remote",
+            command=lambda: self._start_remote_commander(manual=True),
+            style="MyComp.TButton",
+        ).grid(row=14, column=1, sticky="w", pady=(10, 0), padx=(12, 0))
+        ttk.Label(
+            frame, style="MyComp.TLabel", textvariable=self.remote_commander_status,
+        ).grid(row=14, column=2, sticky="e", pady=(10, 0), padx=(6, 0))
 
-        ttk.Button(frame, style="MyComp.TButton", text="Update MyComp Bot", command=self._request_update).grid(row=16, column=1, sticky="w", pady=(10, 0))
-        ttk.Button(frame, style="MyComp.TButton", text="Repair Tailscale now", command=lambda: self._request_tailscale_check(manual=True)).grid(row=16, column=2, sticky="e", pady=(10, 0))
-        ttk.Label(frame, style="MyComp.TLabel", textvariable=self.update_status, wraplength=600).grid(row=17, column=0, columnspan=3, sticky="w", pady=(6, 0))
-        ttk.Label(frame, style="MyComp.TLabel", text="Mouse/keyboard actions require Elevated. Accessibility uses Windows UI Automation; screen capture uses native Win32 capture. OCR uses RapidOCR with ONNX Runtime. Tailscale provides the public HTTPS connection.", wraplength=700).grid(row=18, column=0, columnspan=3, sticky="w", pady=(12, 0))
-        ttk.Label(frame, style="MyComp.TLabel", textvariable=self.tailscale_status, wraplength=700).grid(row=19, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        remote_panel = tk.Frame(
+            frame, bg="#f4f8fc", highlightbackground="#e1eaf1", highlightthickness=1,
+            padx=12, pady=9,
+        )
+        remote_panel.grid(row=15, column=0, columnspan=3, sticky="ew", pady=(9, 4))
+        remote_panel.columnconfigure(0, weight=1)
+        self.remote_agent_badge = tk.Label(
+            remote_panel, text="● Checking local remote agents...", anchor="w",
+            bg="#f4f8fc", fg="#64748b", font=("Segoe UI", 9, "bold"),
+        )
+        self.remote_agent_badge.grid(row=0, column=0, sticky="w")
+        self.remote_account_badge = tk.Label(
+            remote_panel, text="● Checking locally saved account...", anchor="w",
+            bg="#f4f8fc", fg="#64748b", font=("Segoe UI", 9),
+        )
+        self.remote_account_badge.grid(row=1, column=0, sticky="w", pady=(3, 0))
+        self.remote_account_note = tk.Label(
+            remote_panel,
+            text="Green = local agent running. Account alias = saved device session, "
+                 "not proof both ChatGPT accounts can connect.",
+            anchor="w", justify="left", wraplength=630,
+            bg="#f4f8fc", fg="#64748b", font=("Segoe UI", 8),
+        )
+        self.remote_account_note.grid(row=2, column=0, sticky="ew", pady=(4, 0))
+
+        ttk.Button(frame, style="MyComp.TButton", text="Update MyComp Bot", command=self._request_update).grid(row=17, column=1, sticky="w", pady=(10, 0))
+        ttk.Button(frame, style="MyComp.TButton", text="Repair Tailscale now", command=lambda: self._request_tailscale_check(manual=True)).grid(row=17, column=2, sticky="e", pady=(10, 0))
+        ttk.Label(frame, style="MyComp.TLabel", textvariable=self.update_status, wraplength=600).grid(row=18, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Label(frame, style="MyComp.TLabel", text="Mouse/keyboard actions require Elevated. Accessibility uses Windows UI Automation; screen capture uses native Win32 capture. OCR uses RapidOCR with ONNX Runtime. Tailscale provides the public HTTPS connection.", wraplength=700).grid(row=19, column=0, columnspan=3, sticky="w", pady=(12, 0))
+        ttk.Label(frame, style="MyComp.TLabel", textvariable=self.tailscale_status, wraplength=700).grid(row=20, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
     def _request_update(self) -> None:
         if self.update_busy:
@@ -1210,9 +1318,74 @@ class MyCompBot(tk.Tk):
         except queue.Empty:
             pass
 
+    def _local_remote_account_worker(self) -> None:
+        """All IO off the Tk thread. Never call remote MCP or read a secret into UI."""
+        try:
+            agents = remote_commander_presence.remote_agent_pids()
+            account = remote_commander_presence.saved_account_hint()
+            self.remote_account_queue.put((agents, account))
+        except Exception:
+            self.remote_account_queue.put(((), remote_commander_presence.AccountHint()))
+
+    def _poll_local_remote_accounts(self) -> None:
+        """Refresh local agent/session facts every 15s without consuming MCP quota."""
+        now = time.monotonic()
+        if now >= self.remote_account_probe_next and not self.remote_account_probe_pending:
+            self.remote_account_probe_next = now + 15
+            self.remote_account_probe_pending = True
+            threading.Thread(target=self._local_remote_account_worker, daemon=True).start()
+        try:
+            while True:
+                pids, account = self.remote_account_queue.get_nowait()
+                self.remote_account_probe_pending = False
+                if pids:
+                    count = len(pids)
+                    self.remote_agent_badge.configure(
+                        text=f"● Local remote agent running — {count} process(es)",
+                        fg="#168452",
+                    )
+                    if count > 1:
+                        self.remote_account_note.configure(
+                            text="Multiple agent processes detected; this does NOT prove "
+                                 "multiple accounts are connected. Other ChatGPT connections "
+                                 "cannot be enumerated from Windows alone."
+                        )
+                    else:
+                        self.remote_account_note.configure(
+                            text="Green shows local agent process only. "
+                                 "Each ChatGPT account must verify device access independently."
+                        )
+                    self.remote_commander_pid = pids[0]
+                    if self.remote_commander_process is None:
+                        self.remote_commander_status.set(f"Agent PID {pids[0]}")
+                else:
+                    self.remote_agent_badge.configure(
+                        text="● No local remote agent detected", fg="#a24a44"
+                    )
+                    self.remote_account_note.configure(
+                        text="Local agent is not running; a saved session alone cannot "
+                             "receive remote commands."
+                    )
+                if account.session_saved:
+                    alias = account.alias if account.alias else "Name not available"
+                    suffix = account.device_id[:8] if account.device_id else "unknown"
+                    self.remote_account_badge.configure(
+                        text=f"● Saved device account: {alias}  ·  Device {suffix}…  (unverified online)",
+                        fg="#b7791f",
+                    )
+                else:
+                    self.remote_account_badge.configure(
+                        text="● No saved local account session (pairing may be needed)",
+                        fg="#64748b",
+                    )
+        except queue.Empty:
+            pass
+
     def _poll(self) -> None:
         self._process_update_events()
         self._poll_connection_checks()
+        if not self._closing:
+            self._poll_local_remote_accounts()
         if self._closing:
             return
         if SHOW_WINDOW_REQUEST.exists():
@@ -1454,7 +1627,21 @@ class MyCompBot(tk.Tk):
             return self.input.key(str(payload.get("key", "")), [str(item) for item in payload.get("modifiers", [])])
         if action == "capture_display": return self.capture.capture()
         if action == "capture_region": return self.capture.capture(dict(payload.get("region") or {}))
-        if action == "capture_window": raise ValueError("capture_window is not implemented in the Windows host yet")
+        if action == "capture_window":
+            selector = dict(payload.get("app") or {})
+            for name in ("handle", "pid", "process_id", "name", "name_contains", "app_name"):
+                if name in payload and name not in selector:
+                    selector[name] = payload[name]
+            if not selector:
+                raise ValueError("capture_window requires a window selector")
+            response = self.automation.execute({"action": "list_windows", **selector, "max_items": 1})
+            windows = response.get("windows", [])
+            if not windows:
+                raise ValueError("no matching window found")
+            bounds = windows[0]["bounds"]
+            capture = self.capture.capture(bounds)
+            capture["window"] = windows[0]
+            return capture
         if action == "ocr":
             capture = self.capture.capture(dict(payload.get("region") or {}) or None)
             from rapidocr_onnxruntime import RapidOCR

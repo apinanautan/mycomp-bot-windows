@@ -33,8 +33,8 @@ class EngineTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_exact_stable_tool_surface(self):
-        self.assertEqual(len(TOOL_NAMES), 8)
-        self.assertEqual(set(TOOL_NAMES), {"api", "shell", "dom_cdp", "applescript", "accessibility", "keyboard", "mouse", "vision"})
+        self.assertEqual(len(TOOL_NAMES), 12)
+        self.assertEqual(set(TOOL_NAMES), {"api", "shell", "dom_cdp", "applescript", "accessibility", "keyboard", "mouse", "vision", "filesystem", "batch_read", "diagnostics", "windows_automation"})
 
     def test_settings_reject_invalid_auth_mode(self):
         with self.assertRaises(ValueError):

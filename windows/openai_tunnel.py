@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import socket
 import subprocess
 import time
 import urllib.request
@@ -55,6 +56,24 @@ class Tunnel:
         self.settings = self.directory / "settings.json"
         self.secret = self.directory / "key.dpapi"
         self.health = self.directory / "health.url"
+        # Legacy settings/key are never moved or overwritten when registering
+        # an additional account's Tunnel. Active profile selection is explicit.
+        self.legacy_settings = self.settings
+        self.legacy_secret = self.secret
+        self.legacy_health = self.health
+        self.profiles_dir = self.directory / "profiles"
+        self.active_profile_file = self.profiles_dir / "active.json"
+        self.active_profile_name = None
+        try:
+            active = json.loads(self.active_profile_file.read_text(encoding="utf-8"))
+            selected = active.get("name") if isinstance(active, dict) else None
+            if selected and self._valid_profile_name(selected):
+                info = self._profile_paths(selected)
+                if info[0].is_file():
+                    self.active_profile_name = selected
+                    self.settings, self.secret, self.health = info
+        except (OSError, ValueError, TypeError):
+            pass
         self.process = None
         self.log = None
         self.retry_at = 0.0
@@ -67,125 +86,188 @@ class Tunnel:
         except FileNotFoundError:
             return {}
 
+    @staticmethod
+    def _valid_profile_name(name: str) -> bool:
+        return isinstance(name, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,47}", name) is not None
+
+    def _profile_paths(self, name: str) -> tuple[Path, Path, Path]:
+        if not self._valid_profile_name(name):
+            raise ValueError("Profile name: use 1–48 ASCII letters, digits, _ or -.")
+        return (
+            self.profiles_dir / f"{name}.json",
+            self.profiles_dir / f"{name}.dpapi",
+            self.profiles_dir / f"{name}.health.url",
+        )
+
+    @staticmethod
+    def _atomic_json(path: Path, value: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        staging = path.with_suffix(path.suffix + ".tmp")
+        try:
+            staging.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(staging, path)
+        finally:
+            staging.unlink(missing_ok=True)
+
+    def list_profiles(self) -> list[str]:
+        """Return saved profile labels, not secrets or identities inferred from PIDs."""
+        if not self.profiles_dir.is_dir():
+            return []
+        result = []
+        for file in self.profiles_dir.glob("*.json"):
+            if file.name == "active.json" or not self._valid_profile_name(file.stem):
+                continue
+            try:
+                doc = json.loads(file.read_text(encoding="utf-8"))
+                if isinstance(doc, dict) and doc.get("name") == file.stem:
+                    validate_tunnel_id(doc.get("tunnel_id", ""))
+                    result.append(file.stem)
+            except (OSError, ValueError, TypeError):
+                continue
+        return sorted(result, key=str.casefold)
+
+    def profile_info(self, name: str) -> dict:
+        metadata, secret, _ = self._profile_paths(name)
+        data = json.loads(metadata.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or data.get("name") != name:
+            raise ValueError("Invalid named Tunnel profile.")
+        validate_tunnel_id(data.get("tunnel_id", ""))
+        return {
+            "name": name,
+            "tunnel_id": data["tunnel_id"],
+            "organization": data.get("organization", ""),
+            "workspace": data.get("workspace", ""),
+            "has_api_key": secret.is_file(),
+            "active": self.active_profile_name == name,
+        }
+
+    def save_profile(self, name: str, tunnel_id: str, key: str = "",
+                     organization: str = "", workspace: str = "") -> dict:
+        """Persist new Tunnel ID immediately; encrypt any new key separately.
+
+        This NEVER changes the legacy active Tunnel. Activation is separate.
+        """
+        tunnel_id = validate_tunnel_id(tunnel_id.strip())
+        metadata, secret, _ = self._profile_paths(name)
+        for hint in (organization, workspace):
+            if not isinstance(hint, str) or len(hint) > 200 or any(ord(c) < 32 for c in hint):
+                raise ValueError("Invalid organization/workspace label.")
+        if metadata.exists():
+            old = self.profile_info(name)
+            if old["tunnel_id"] != tunnel_id:
+                raise ValueError("Profile already contains another Tunnel ID; use a new profile name.")
+            # Adding a key later must not erase the organization/workspace
+            # metadata already recorded with this Tunnel ID.
+            if not organization:
+                organization = old["organization"]
+            if not workspace:
+                workspace = old["workspace"]
+        if key.strip():
+            validate(tunnel_id, key.strip())
+            protected = protect(key.strip().encode("utf-8"))
+            secret.parent.mkdir(parents=True, exist_ok=True)
+            staging = secret.with_suffix(".dpapi.tmp")
+            try:
+                staging.write_bytes(protected)
+                os.replace(staging, secret)
+            finally:
+                staging.unlink(missing_ok=True)
+        self._atomic_json(metadata, {
+            "name": name, "tunnel_id": tunnel_id,
+            "organization": organization, "workspace": workspace,
+            "enabled": self.active_profile_name == name and bool(self.load().get("enabled")),
+        })
+        return self.profile_info(name)
+
+    def activate_profile(self, name: str) -> None:
+        """Explicit activation only, after an encrypted credential exists."""
+        metadata, secret, health = self._profile_paths(name)
+        info = self.profile_info(name)
+        if not info["has_api_key"]:
+            raise ValueError("Save a new runtime API key for this profile first.")
+        key = protect(secret.read_bytes(), decrypt=True).decode("utf-8")
+        validate(info["tunnel_id"], key)
+        if not self.binary.is_file():
+            raise FileNotFoundError("Install the official tunnel-client.exe first.")
+        self.stop()
+        active_settings = json.loads(metadata.read_text(encoding="utf-8"))
+        active_settings["enabled"] = True
+        self._atomic_json(metadata, active_settings)
+        self._atomic_json(self.active_profile_file, {"name": name})
+        self.active_profile_name = name
+        self.settings, self.secret, self.health = metadata, secret, health
+        self.retry_at = 0
+        self.failures = 0
+        self.error = ""
+        self.start()
+
     @property
     def mcp_endpoint(self) -> str:
         """The exact local binding passed to the Tunnel runtime."""
         return LOCAL_MCP_ENDPOINT
 
-    def plugin_prompt(self, plugin_name: str, tailscale_base: str) -> str:
-        """Build both routes from verified, non-secret settings; no secret reads."""
-        from urllib.parse import urlsplit, urlunsplit
+    def plugin_prompt(self, plugin_name: str, tailscale_base: str, *, computer_name: str | None = None) -> str:
+        """Generate a fresh-account setup prompt; never expose existing tunnel IDs or keys.
 
+        Existing settings are intentionally NOT included: the recipient GPT may
+        be signed into a different Platform organization or ChatGPT account.
+        """
         name = plugin_name.strip() if isinstance(plugin_name, str) else ""
         if not name or len(name) > 80 or any(ord(char) < 32 for char in name):
             raise ValueError("Enter a plugin name (1–80 characters) before creating a prompt.")
-        saved = self.load()
-        tunnel_id = validate_tunnel_id(saved.get("tunnel_id"))
-        url = urlsplit(tailscale_base.strip() if isinstance(tailscale_base, str) else "")
-        if (
-            url.scheme != "https" or not url.hostname
-            or not url.hostname.endswith(".ts.net")
-            or url.username or url.password or url.query or url.fragment
-        ):
-            raise ValueError("Save a valid Tailscale HTTPS base URL first.")
-        try:
-            port = url.port or 443
-        except ValueError as error:
-            raise ValueError("Invalid Tailscale port.") from error
-        if port not in {443, 8443, 10000}:
-            raise ValueError("Unsupported Tailscale Funnel HTTPS port.")
-        tailscale_endpoint = urlunsplit(("https", url.netloc, url.path.rstrip("/") + "/mcp", "", ""))
-        endpoint = self.mcp_endpoint
-        return (
-            f"ชื่อหลักที่ผู้ใช้กำหนดเอง: {name}\\n"
-            f"ชื่อปลั๊กอินช่องทาง Tailscale: {name} Tailscale\\n"
-            f"ชื่อปลั๊กอินช่องทาง Tunnel: {name} Tunnel\\n"
-            f"ชื่อปลั๊กอินช่องทาง Remote Desktop Commander: {name} Remote Desktop Commander\\n"
-            "ต้องใช้ชื่อทั้งสามรายการตามนี้ โดยเติมคำท้าย Tailscale, Tunnel และ Remote Desktop Commander "
-            "โดยอัตโนมัติจากชื่อหลักที่ผู้ใช้กรอก ห้ามใช้ชื่อจากตัวอย่างหรือเปลี่ยนชื่อเอง\\n"
-            "สร้างปลั๊กอินสำหรับ MyComp Bot ที่รองรับการเชื่อมต่อ 2 ช่องทาง "
-            "คือ Tailscale และ OpenAI Secure MCP Tunnel โดยตรวจสอบว่าระบบปลั๊กอินรองรับจริงก่อนดำเนินการ\\n\\n"
-            f"ช่องทาง Tailscale HTTPS MCP: {tailscale_endpoint}\\n"
-            f"ช่องทาง OpenAI Secure MCP Tunnel ID: {tunnel_id}\\n"
-            f"Local MCP binding ของ Tunnel runtime: {endpoint}\\n\\n"
-            "localhost / 127.0.0.1 เป็นปลายทางภายในเครื่อง Windows เท่านั้น "
-            "ChatGPT Cloud ไม่สามารถเรียก URL นี้โดยตรงได้\\n"
-            "ตรวจสอบการเข้าถึง Tailscale Funnel จากภายนอกจริง รวมถึง OAuth และเครือข่าย "
-            "ห้ามสรุปว่า URL .ts.net เข้าถึงจากคลาวด์ได้เพียงเพราะเป็น HTTPS\\n"
-            "ตรวจสอบการรองรับ Secure MCP Tunnel และรูปแบบการผูก Tunnel ID อย่างเป็นทางการ "
-            "ห้ามเดา connector URL หรือสร้าง endpoint ปลอม\\n"
-            f"ขั้นที่ 1: ตรวจและสร้าง/อัปเดตปลั๊กอินสองช่องทาง MyComp Bot โดยใช้ชื่อ {name} Tailscale "
-            f"และ {name} Tunnel เพื่อเชื่อม MyComp Bot เครื่องเดียวกันจาก Tailscale HTTPS MCP "
-            "และ OpenAI Secure MCP Tunnel ตามลำดับ หากแพลตฟอร์มรองรับเส้นทางคู่ในปลั๊กอินเดียว "
-            "จะเพิ่มตัวเลือก failover อย่างปลอดภัยก็ได้ แต่ต้องระบุชัดเจนว่าใช้งานจริงในรูปแบบใด\\n"
-            "อย่าสร้างตัวเชื่อมต่อซ้ำโดยไม่มีเหตุผล และอย่าสร้างปลั๊กอินหรือ endpoint จำลอง\\n\\n"
-            "สำหรับปลั๊กอินทั้งสาม (Tailscale, Tunnel, Remote Desktop Commander) "
-            "ให้แนบ Skill ห้าชุดเหมือนกันจาก GitHub โปรเจกต์ MyComp Bot: "
-            "skills/development-loop/SKILL.md, skills/ponytail/SKILL.md, "
-            "skills/agent-desktop-portable/SKILL.md, "
-            "skills/connection-recovery/SKILL.md และ skills/tool-routing/SKILL.md "
-            "พร้อมแนบ skills/ponytail/LICENSE ตาม MIT "
-            "และ skills/connection-recovery/PLAYBOOK.md สำหรับกรณีซ่อมที่ยืนยันแล้ว "
-            "แหล่งหลักคือ https://github.com/apinanautan/mycomp-bot-windows/tree/main/skills "
-            "ตรวจสอบความสามารถรองรับ Skill และสิทธิ์แก้ไขของแต่ละปลั๊กอินก่อนลงมือ "
-            "หากแก้ไขปลั๊กอินที่มีเจ้าของอื่นไม่ได้ให้รายงานตามจริง ไม่อ้างว่าติดตั้งแล้ว "
-            "การแนบ Skill ไม่ใช่การเพิ่มสิทธิ์ MCP และไม่ทำให้ปลั๊กอินที่ไม่มี transport ใช้ได้เอง\\n"
-            "ปลั๊กอิน Remote Desktop Commander เป็นตัวที่สาม: ตรวจว่ามีปลั๊กอินอยู่แล้ว "
-            "และมีสิทธิ์แก้ไขหรือไม่ ถ้าแก้ไม่ได้ให้รายงาน ไม่สร้างตัวปลอมหรือซ้ำ "
-            "ใช้ Skill tool-routing วัดเวลาเรียกเครื่องมืออ่านสถานะจริงแยกตามประเภทงาน "
-            "เลือกตัวที่เร็วและเสถียรที่สุดจากช่องทางที่ได้รับอนุญาต "
-            "ไม่มีการจัดอันดับถาวรเพราะความเร็วขึ้นกับงานและเครือข่าย "
-            "ถ้าตัวใดเสียใช้ connection-recovery วินิจฉัยและพิสูจน์การซ่อม "
-            "บันทึกความรู้ที่ผ่านการตรวจใน Playbook และ GitHub เป็นแหล่งหลัก "
-            "ก่อนกระจายสกิลฉบับเดียวกันไปยังปลั๊กอินที่แก้ได้ "
-            "ห้ามแก้ไขสกิลที่เผยแพร่อัตโนมัติโดยไม่ตรวจ diff/test และไม่ผ่านสิทธิ์อนุมัติ "
-            "ห้ามสลับเส้นทางแล้วทำคำสั่งแก้ข้อมูลซ้ำโดยยังไม่ทราบผลเดิม\\n"
+        machine = socket.gethostname() if computer_name is None else computer_name
+        if not isinstance(machine, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}", machine):
+            raise ValueError("Invalid local Windows computer name.")
 
+        return f"""# MyComp Bot — Tailscale เชื่อมเองก่อน แล้วให้ ChatGPT จัดการทุกขั้นตอนที่เหลือจนเสร็จ
 
-            "ทดสอบ MCP tools/list และเรียกเครื่องมืออ่านสถานะที่ปลอดภัยผ่านแต่ละเส้นทางจริง "
-            "ก่อนยืนยันว่าพร้อมใช้งาน\\n"
-            "ตรวจสอบความล้มเหลวการเชื่อมต่อก่อนสลับเส้นทาง ห้ามสั่งรันซ้ำสำหรับคำสั่ง "
-            "ที่แก้ข้อมูลหรือไม่สามารถยืนยันได้ว่าไม่ได้ทำไปแล้ว และห้ามลดระดับการยืนยันตัวตน\\n"
-            "ระดับสิทธิ์ที่เจ้าของเครื่องร้องขอ: อนุญาตทั้งหมด (Full Control) "
-            "สำหรับ MyComp Bot, Tailscale, Tunnel และ agent-desktop เท่าที่แต่ละระบบรองรับจริง "
-            "ให้ตั้งค่าระดับสูงสุดที่เจ้าของเครื่องอนุญาตไว้และระบบรองรับได้ โดยไม่ลดสิทธิ์ลงเอง "
-            "สำหรับงานทั่วไปภายในขอบเขตที่อนุญาต ไม่ต้องถามยืนยันซ้ำโดยไม่จำเป็น "
-            "แต่ต้องรักษาการยืนยันตัวตน ขอบเขตเครื่อง/โฟลเดอร์ ข้อจำกัดของแพลตฟอร์ม "
-            "และขออนุมัติเฉพาะการกระทำที่มีผลกระทบสูงหรือเพิ่มสิทธิ์นอกขอบเขตเดิม "
-            "ห้ามพยายามข้ามระบบตรวจสอบความปลอดภัยหรืออ้างว่า Full Control ปลดล็อกข้อห้ามทั้งหมด\\n"            "รักษา OAuth/authentication และขอบเขตสิทธิ์ของ MyComp Bot เดิม "
-            "ห้ามร้องขอหรือแสดง API key, access token, .env หรือความลับในพรอมต์\\n"
-            "ขั้นที่ 2: เมื่อปลั๊กอินที่รองรับจริงพร้อมและทดสอบเครื่องมืออ่านสถานะได้แล้ว "
-            "จึงติดตั้ง agent-desktop ของ vercel-labs บน Windows เครื่องนี้แบบแยกตามเครื่อง "
-            "(https://github.com/vercel-labs/agent-desktop) โดยขอความยินยอมจากเจ้าของเครื่องก่อนติดตั้ง "
-            "ตรวจ Windows/Node.js/npm และใช้แพ็กเกจทางการที่ตรวจสอบเวอร์ชันได้ "
-            "หลีกเลี่ยงการขอสิทธิ์ผู้ดูแลระบบโดยไม่จำเป็น และอย่าลบหรือเขียนทับเครื่องมือเดิม\\n"
-            "หลังติดตั้งให้ตรวจ agent-desktop version และ agent-desktop status พร้อมแสดงผลจริง "
-            "ถ้า Windows Accessibility, สิทธิ์ไฟล์/ACL หรือ dependency ไม่พร้อมให้รายงานสาเหตุ "
-            "และหยุดขั้นตอนที่ทำไม่สำเร็จ ไม่อ้างว่าติดตั้งผ่านแล้ว\\n\\n"
-            "ขั้นที่ 3: agent-desktop mcp ให้ MCP ผ่าน stdio ภายในเครื่อง ไม่ใช่ HTTP URL สาธารณะ "
-            "ห้ามสร้าง URL ปลอมหรือบอกว่า ChatGPT Cloud เรียก stdio บน Windows ได้โดยตรง "
-            "ให้ตรวจว่าระบบ MyComp Bot รองรับการเปิดและกำกับ MCP subprocess/bridge "
-            "สำหรับ agent-desktop ได้จริงก่อนเพิ่มเครื่องมือ หากต้องพัฒนา adapter ให้ทำตามระบบอนุญาตเดิม "
-            "และยืนยันกับเจ้าของเครื่องก่อนเปิดสิทธิ์ UI control หรือเพิ่มชื่อ MCP tool สาธารณะ\\n"
-            "เมื่อ bridge พร้อม ให้เชื่อมการเรียก agent-desktop ผ่าน MyComp Bot ที่ปลั๊กอิน Tailscale "
-            "และ Tunnel ใช้ร่วมกัน หรือสร้างปลั๊กอิน Desktop แยกเฉพาะเมื่อแพลตฟอร์มรองรับจริง "
-            "และมีการยืนยันตัวตน/สิทธิ์เทียบเท่าเดิม\\n\\n"
-            "ขั้นที่ 4: ทดสอบ agent-desktop list-windows, snapshot และการใช้ ref ID "
-            "เพื่ออ่าน Accessibility tree ในหน้าต่างทดสอบที่ไม่ใช่ข้อมูลลับ "
-            "การคลิกหรือแก้ค่าต้องได้รับอนุญาตตามระดับสิทธิ์ของ MyComp Bot "
-            "และต้อง snapshot ใหม่เพื่อตรวจผลหลังทำงาน อย่าใช้ ref เก่าหลัง UI เปลี่ยน "
-            "ใช้ screen capture เดิมเป็น fallback เฉพาะเมื่อต้องใช้และได้รับอนุญาต\\n"
-            "อธิบายว่า agent-desktop ช่วยค้นหาปุ่ม/ช่องข้อความ/หน้าต่างด้วย Accessibility "
-            "และเรียก click/set-value/scroll ผ่าน ref ส่วน MyComp Bot ดูแล MCP/OAuth/สิทธิ์ "
-            "รวมถึงบอกข้อจำกัดของแอปที่อ่าน Accessibility ไม่ได้\\n"
-            "จัดทำรายงานแยกตามเครื่อง: ปลั๊กอิน Tailscale, ปลั๊กอิน Tunnel, agent-desktop "
-            "(ติดตั้งแล้วหรือไม่, เวอร์ชัน, MCP bridge, permission, การทดสอบสำเร็จ/ล้มเหลว) "
-            "ห้ามแสดงภาพหน้าจอ ข้อมูลคลิปบอร์ด token หรือข้อมูลส่วนตัวในรายงานสาธารณะ\\n\\n"
-            "Runtime ready ไม่ใช่หลักฐานว่า ChatGPT เรียกใช้เครื่องมือสำเร็จ "
-            "ต้องแสดงผลการทดสอบ tools/list และการเรียกอ่านสถานะจริง\\n"
-            "ถ้าแพลตฟอร์มไม่รองรับปลั๊กอินเส้นทางคู่ ให้แจ้งข้อจำกัดและเสนอรูปแบบ "
-            "ที่รองรับจริงเท่านั้น ห้ามอ้างว่ารองรับ failover หรือสร้างปลั๊กอินหลอก"
-        ).replace("\\n", "\n")
+ชื่อระบบและปลั๊กอินหลัก: {name}
+Windows เครื่องเป้าหมาย: {machine}
+โปรเจกต์/Skills: https://github.com/apinanautan/mycomp-bot-windows
+OpenAI Tunnel Client: https://github.com/openai/tunnel-client
+MCP upstream ตัวอย่างที่ต้องตรวจจากเครื่องจริง: http://127.0.0.1:8645/mcp
+
+**จุดเริ่มต้นที่ผู้ใช้ทำเองเรียบร้อยแล้ว:** ผู้ใช้ติดตั้ง/เชื่อมต่อ Tailscale กับ ChatGPT บัญชีนี้ด้วยตัวเองแล้ว อย่าเริ่มติดตั้ง Tailscale ซ้ำ อย่าขอให้ผู้ใช้ทำขั้นตอนนี้อีก ให้เรียกใช้ปลั๊กอิน Tailscale ที่เชื่อมอยู่เพื่อเข้าถึง Windows และทำงานที่เหลือให้จบ
+
+**ภารกิจ:** ทำงานจริงบนคอมพิวเตอร์ผ่าน Tailscale เป็นช่องทางเริ่มต้น ตรวจของเดิมก่อนทุกขั้นตอน ข้ามขั้นตอนที่ทำเสร็จและใช้งานได้แล้ว ติดตั้งหรือแก้เฉพาะส่วนที่ยังขาด จากนั้นสร้าง/เชื่อม Dino Tunnel (หรือ {name} Tunnel) เพื่อให้เป็นช่องทางหลักที่รวดเร็วขึ้นเมื่อพิสูจน์ว่าใช้งานได้จริง ให้ Tailscale เป็นทางสำรอง ห้ามจบเพียงเขียนคู่มือ พรอมต์ใหม่ หรือรายงานโดยยังไม่ลงมือ
+
+STEP 0 — สำรวจระบบและสิทธิ์ (เริ่มทันที ไม่ต้องถามชื่อซ้ำ)
+1. ใช้ Tailscale ที่เชื่อมไว้แล้ว เรียก read-only tool ตรวจ Windows hostname ให้ตรงกับ {machine}, รุ่น MyComp Bot ที่กำลังรัน, local MCP, Git repository, AGENTS.md, STATE.md, git status และบริการที่กำลังทำงาน
+2. ตรวจปลั๊กอินและสิทธิ์ที่มีใน ChatGPT จริง: Tailscale, OpenAI Secure MCP Tunnel, Remote Desktop Commander, Plugin Creator และทักษะที่มีอยู่ อย่าอ้างว่าเครื่องมือใดมีสิทธิ์ถ้ายังไม่ตรวจ
+3. ห้าม reset/stash/overwrite งานใน repository ที่แก้ค้างอยู่ ห้าม restart งานที่กำลังทำหรือปิด Chrome โดยไม่จำเป็น
+
+STEP 1 — ตรวจ Chrome และ OpenAI Platform โดยใช้เซสชันเดิม
+1. ใช้ Chrome หน้าต่างและโปรไฟล์ที่เปิดอยู่จริง หากจำเป็นให้ใช้ agent-desktop หรือ Remote Desktop Commander ที่มีสิทธิ์เข้าถึง ตรวจหน้า https://platform.openai.com/settings/organization/tunnels และ https://platform.openai.com/settings/organization/api-keys
+2. ตรวจ Organization, Project และ ChatGPT Workspace ที่จะผูก Tunnel ให้ตรงกับบัญชีเป้าหมาย อย่าเดา Workspace จาก Organization เพียงอย่างเดียว
+3. ตรวจ Tunnel ID, client และ key ที่มีอยู่ก่อน หากใช้งานได้และอยู่ในบัญชี/Workspace ที่ถูกต้องให้ใช้ต่อ หากไม่มีหรือเป็นของบัญชีอื่นจึงสร้างใหม่โดยแยกโปรไฟล์ ไม่เขียนทับหรือยึดสิทธิ์ของบัญชีเดิม
+4. หากต้องใช้สิทธิ์ล็อกอิน/อนุมัติ/สร้าง API key ให้ผู้ใช้อนุมัติเฉพาะจุดนั้น แล้วดำเนินขั้นตอนถัดไปต่อทันที ไม่ให้ผู้ใช้ต้องเริ่มพรอมต์ใหม่
+
+STEP 2 — จัดการ OpenAI Secure MCP Tunnel / Channel
+1. ตรวจ Tunnel Client ทางการและ config ปัจจุบันก่อนติดตั้งใหม่; ถ้าจำเป็นจึงสร้าง Tunnel ใน Organization/Workspace เป้าหมายตามสิทธิ์จริง
+2. สร้าง API key เฉพาะ runtime ด้วยสิทธิ์ขั้นต่ำ Tunnels Read+Use หากยังไม่มีที่ใช้ได้ ผู้ใช้กรอก key ผ่านช่องลับในคอมพิวเตอร์เท่านั้น เก็บด้วย Windows DPAPI ห้ามพิมพ์ secret ในแชท/URL/log
+3. ตั้ง MCP upstream จากค่าจริง (โดยปกติ http://127.0.0.1:8645/mcp), OAuth และโปรไฟล์ที่แยกจากของเดิม ตรวจ healthz, readyz, /api/status, main channel และ authenticated MCP tools/list พร้อม read-only tool call จริง
+4. สร้างหรือปรับปลั๊กอิน {name} Tunnel ด้วย Connection: Tunnel ตามสิทธิ์ของ ChatGPT/Plugin Creator และ Tunnel ID ที่ยืนยันแล้ว ไม่ใช้ Tailscale Funnel เป็นทางวิ่งของ Tunnel ถ้าไม่จำเป็น
+5. เมื่อ Tunnel/main ใช้งานจริงและเร็วกว่า ให้ใช้เป็นช่องทางหลักสำหรับ shell, filesystem, git, tests และ API; Tailscale เป็น fallback. ห้ามเปิด Harpoon หากไม่มี target/เหตุผลที่ชัดเจน
+
+STEP 3 — Remote Desktop Commander และงาน GUI
+1. ตรวจ agent/process, who_am_i, list_devices และ Device ID ของ Remote Desktop Commander เท่าที่เครื่องมือรองรับ ตรวจว่าบัญชีที่เชื่อมควบคุมเครื่อง {machine} ได้จริง
+2. ถ้ามีตัวที่ใช้ได้แล้ว ให้คงไว้และใช้ต่อ หากยังไม่มีให้ติดตั้ง/จับคู่ผ่านขั้นตอนที่ผู้ใช้อนุมัติ โดยไม่ logout หรือลบบัญชีเดิม และไม่อ้างว่าการมีโปรเซสเท่ากับเชื่อมบัญชีสำเร็จ
+3. ตรวจ agent-desktop, list-windows, snapshot และทดสอบ GUI แบบปลอดภัย; อย่าเปิด Chrome โปรไฟล์ใหม่หรือปิดเซสชันที่ล็อกอินอยู่
+
+STEP 4 — ปลั๊กอิน ชื่อ ไอคอน และ Skills
+1. ตรวจปลั๊กอิน {name} Tailscale, {name} Tunnel และ Remote Desktop Commander ที่มีอยู่แล้วก่อนสร้างซ้ำ เปลี่ยนชื่อ/metadata เฉพาะปลั๊กอินที่ผู้ใช้เป็นเจ้าของและแพลตฟอร์มอนุญาต
+2. ใช้ไอคอนต้นฉบับของ MyComp Bot จาก windows/assets/mycomp-bot.png หรือ .ico ถ้ามีและแพลตฟอร์มรองรับ ห้ามสร้างปลั๊กอินหลอกหรืออ้างว่าเปลี่ยนไอคอนสำเร็จโดยไม่ได้ตรวจผล
+3. ตรวจและติดตั้ง/แนบ Skills: development-loop, ponytail, agent-desktop-portable, connection-recovery, tool-routing รวม LICENSE/PLAYBOOK ที่เกี่ยวข้องจาก repository; ข้ามสิ่งที่ติดตั้งถูกต้องแล้ว
+4. ปรับ routing และ recovery ให้ Tunnel/main เป็นหลักหลังตรวจผ่าน, Tailscale เป็น fallback และ Remote Desktop Commander/agent-desktop สำหรับ GUI ตามความเหมาะสม
+
+STEP 5 — ทดสอบจริง แก้ปัญหา และทำต่อจนเสร็จ
+1. ทดสอบ Engine, OAuth, Tailscale, Tunnel/main, MCP tools/list และ read-only tool call จริง รวม MCP filesystem, batch_read, diagnostics ถ้า Engine รุ่นนี้รองรับ; ตรวจ Remote Desktop Commander, Chrome GUI, Skills, icon/metadata และระบบเริ่มทำงานใหม่; ตรวจความเร็วและความเสถียรจริง ไม่เดาจาก HTTP 200 เพียงอย่างเดียว
+2. ทดสอบ Windows unit/integration tests แยกปัญหาทดสอบเก่าหรือ POSIX-only จากบั๊กจริง แก้เท่าที่เกี่ยวข้องโดยไม่ทำลายงานเดิม
+3. บันทึก checkpoint ใน STATE.md ระบุสิ่งที่ทำจริง สิ่งที่ข้ามเพราะมีแล้ว หลักฐานทดสอบ และสิ่งที่ยังรอสิทธิ์ โดยไม่บันทึก secret
+4. ทำขั้นตอนถัดไปอัตโนมัติในเซสชันเดียวกันจนหมดงานที่มีสิทธิ์ทำ หากต้องรอการอนุมัติให้ถามเฉพาะจุดนั้น แล้วทำต่อ ไม่วนกลับไปขอให้เชื่อม Tailscale อีก
+5. สรุปสถานะเป็น สำเร็จจริง / รอการอนุมัติ / ไม่รองรับ / ยังทดสอบไม่ผ่าน โดยไม่กล่าวอ้าง 100% หากมีข้อค้าง
+
+กฎสำคัญ: ผู้ใช้เชื่อม Tailscale เองแล้วเท่านั้นที่เป็นเงื่อนไขเริ่มงาน อย่าติดตั้งซ้ำ ไม่สร้าง ZIP เป็นขั้นแรก ไม่เปลี่ยน Tunnel ID/API key/บัญชีที่ใช้งานได้โดยพลการ ไม่ลด OAuth ไม่เปิด public MCP แบบไม่มีการยืนยันตัวตน ไม่เผยแพร่ Release หรือแก้ Git history โดยไม่มีคำสั่งเฉพาะ ทำงานต่อเนื่องให้มากที่สุดภายใต้สิทธิ์และเครื่องมือจริง"""
 
     def save(self, tunnel_id: str, key: str, enabled: bool):
         tunnel_id, key = tunnel_id.strip(), key.strip()
@@ -197,7 +279,10 @@ class Tunnel:
         temporary.write_bytes(protect(key.encode()))
         os.replace(temporary, self.secret)
         temporary = self.settings.with_suffix(".tmp")
-        temporary.write_text(json.dumps({"tunnel_id": tunnel_id, "enabled": bool(enabled)}), encoding="utf-8")
+        extra = {}
+        if self.active_profile_name:
+            extra = {k: v for k, v in self.load().items() if k in ("name", "organization", "workspace")}
+        temporary.write_text(json.dumps({**extra, "tunnel_id": tunnel_id, "enabled": bool(enabled)}), encoding="utf-8")
         os.replace(temporary, self.settings)
         self.stop()
         self.retry_at = 0
@@ -259,13 +344,26 @@ class Tunnel:
                 self.retry_at = time.monotonic() + 60
 
     def status(self):
+        """Distinguish control-plane readiness from authenticated MCP tool access."""
         if self.process is None:
             return self.error or "Not connected"
         try:
             base = self.health.read_text(encoding="utf-8").strip()
             if not re.fullmatch(r"http://127\.0\.0\.1:[0-9]+", base):
                 return "Starting; waiting for private health URL"
-            with urllib.request.urlopen(base + "/readyz", timeout=2) as response:
-                return "Runtime ready; ChatGPT tool access still requires connector verification" if response.status == 200 else "Runtime not ready"
-        except (OSError, ValueError):
-            return "Runtime running; not ready. Check runtime.log for authentication or MCP errors."
+            with urllib.request.urlopen(base + "/api/status", timeout=2) as response:
+                if response.status != 200:
+                    return "Tunnel control plane not ready"
+                payload = json.load(response)
+            channels = payload.get("channels", [])
+            main = next((item for item in channels if item.get("name") == "main"), None)
+            if not main or not main.get("enabled"):
+                return "Tunnel connected; MCP main channel disabled"
+            probe = main.get("probe_status", "")
+            if probe == "auth-required":
+                return "Tunnel main connected; OAuth required for MCP probe. Verify authenticated tools/list in ChatGPT"
+            if probe in ("failed", "error", "unhealthy"):
+                return "Tunnel main MCP probe failed; check runtime.log"
+            return "Tunnel main active; verify authenticated ChatGPT tools/list and tool call"
+        except (OSError, ValueError, KeyError, TypeError):
+            return "Tunnel running; channel status unavailable. Check runtime.log"

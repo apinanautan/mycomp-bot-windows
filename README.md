@@ -192,3 +192,6 @@ launcher จะสร้าง `.venv` ใน repository และติดต�
 ---
 
 คู่มือ Windows ฉบับย่ออยู่ที่ [windows/README.md](windows/README.md) แต่ให้ยึด README หน้านี้เป็นข้อมูลการติดตั้งและแก้ปัญหาหลัก
+
+## Release v1.1.23: Windows MCP tools and UI automation
+Adds filesystem, batch_read, diagnostics, and full-control-only windows_automation to the MCP engine. The existing Windows UI bridge is retained, with selected-window capture and window frame resizing implemented. Existing OAuth, configured roots, tunnel settings, and credential storage remain unchanged. Restart MyComp Bot after updating so the Engine registers the new tools.

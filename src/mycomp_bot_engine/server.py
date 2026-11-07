@@ -38,6 +38,7 @@ from .oauth import OAuthService, SQLiteTokenVerifier
 from .permissions import MCP_COMPATIBILITY_SCOPE, OFFLINE_ACCESS_SCOPE, PERMISSION_LEVELS, PermissionPolicy, level_scope
 from .runtime import RuntimeController
 from .tool_queue import ToolQueue
+from .schema import TOOL_NAMES
 
 ReadOperation = Literal["list", "read", "read_many", "stat", "stat_many", "search", "search_text", "hash", "tree"]
 ChangeOperation = Literal["write", "patch", "patch_many", "apply_patch", "copy", "move", "mkdir", "delete", "trash", "restore_backup"]
@@ -302,6 +303,80 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
             )
         return run
 
+    @mcp.tool(description="Read, search, list, stat, write or patch files within configured allowed roots. Writes require elevated permission; deletes and protected paths are not exposed.")
+    @threaded
+    def filesystem(
+        operation: Literal["list", "read", "read_many", "stat", "stat_many", "search", "search_text", "write", "patch", "patch_many"],
+        path: str = ".", paths: list[str] | None = None, content: str | None = None,
+        old: str | None = None, new: str | None = None, changes: list[dict[str, Any]] | None = None,
+        query: str | None = None, include: list[str] | None = None, exclude: list[str] | None = None,
+        max_results: int = 100, request_id: str | None = None,
+    ) -> dict[str, Any]:
+        started = time.monotonic()
+        try:
+            write = operation in {"write", "patch", "patch_many"}
+            policy.require("elevated" if write else "normal", "filesystem." + operation)
+            options: dict[str, Any] = {}
+            if operation in {"read_many", "stat_many"}:
+                options["paths"] = paths
+            if operation == "write":
+                if content is None: raise ValueError("content is required")
+                options["content"] = content
+            if operation == "patch":
+                if old is None or new is None: raise ValueError("old and new are required")
+                options.update(old=old, new=new)
+            if operation == "patch_many":
+                options["changes"] = changes
+            if operation in {"search", "search_text"}:
+                if not query: raise ValueError("query is required")
+                options.update(query=query, include=include, exclude=exclude, max_results=max_results)
+            result = files.execute(operation, path, **options)
+            return envelope(request_id=request_id, changed=write, results=[result], started=started)
+        except Exception as error:
+            return failed(error, request_id=request_id, started=started, backend="filesystem")
+
+    @mcp.tool(description="Read or stat up to 20 allowed-root files in one MCP call. Read-only; individual failures are reported without aborting other files.")
+    @threaded
+    def batch_read(
+        paths: list[str], operation: Literal["read", "stat"] = "read",
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        started = time.monotonic()
+        try:
+            policy.require("normal", "batch_read")
+            if not isinstance(paths, list) or not 1 <= len(paths) <= 20:
+                raise ValueError("paths must contain 1 to 20 entries")
+            results = []
+            for path in paths:
+                try:
+                    if not isinstance(path, str) or not path:
+                        raise ValueError("path must be a nonempty string")
+                    results.append({"path": path, "ok": True, "result": files.execute(operation, path)})
+                except Exception as error:
+                    results.append({"path": path, "ok": False, "error": type(error).__name__ + ": " + str(error)})
+            return envelope(request_id=request_id, results=results, started=started)
+        except Exception as error:
+            return failed(error, request_id=request_id, started=started, backend="batch_read")
+
+    @mcp.tool(description="Read-only MyComp Engine diagnostics. Returns tool readiness and configured limits, not secrets, tokens, file contents or credentials.")
+    @threaded
+    def diagnostics(request_id: str | None = None) -> dict[str, Any]:
+        started = time.monotonic()
+        try:
+            policy.require("normal", "diagnostics")
+            return envelope(request_id=request_id, results=[{
+                "engine": "mycomp-bot",
+                "mcp_transport": "streamable-http",
+                "permission_level": policy.effective_level(),
+                "tool_count": len(TOOL_NAMES),
+                "filesystem_roots_configured": len(settings.allowed_roots),
+                "filesystem_read_limit_bytes": settings.max_read_bytes,
+                "shell_enabled": settings.allow_shell,
+                "queue": "single-flight-per-user-and-tool",
+                "uptime_probe": "responsive",
+            }], started=started)
+        except Exception as error:
+            return failed(error, request_id=request_id, started=started, backend="diagnostics")
     @mcp.tool(description="Send exactly one HTTP API request and return the response. No browser or UI fallback is performed.")
     @threaded
     def api(
@@ -492,6 +567,8 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
         started = time.monotonic()
         try:
             policy.require("full", "applescript")
+            if os.name == "nt":
+                raise OSError("AppleScript is macOS-only; use windows_automation with PowerShell on Windows")
             if not script or len(script.encode("utf-8")) > 128_000:
                 raise ValueError("script must contain between 1 and 128000 UTF-8 bytes")
             argv = ["/usr/bin/osascript", "-l", language, "-e", script, *(arguments or [])]
@@ -506,7 +583,34 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
         except Exception as error:
             return failed(error, request_id=request_id, started=started, backend="applescript")
 
-    @mcp.tool(description="Read or act on macOS Accessibility elements only, optionally limited to a display. Coordinate and OCR fallback are explicitly.")
+    @mcp.tool(description="Windows counterpart to AppleScript: run explicitly supplied PowerShell automation under full-control permission. Windows only; no implicit translation of AppleScript.")
+    @threaded
+    def windows_automation(
+        script: str, execution: ShellMode = "foreground", timeout_seconds: float = 60,
+        include_stdout: bool = True, include_stderr: bool = True,
+        dry_run: bool = False, request_id: str | None = None,
+    ) -> dict[str, Any]:
+        started = time.monotonic()
+        try:
+            policy.require("full", "windows_automation")
+            if os.name != "nt":
+                raise OSError("windows_automation requires Windows")
+            if not script or len(script.encode("utf-8")) > 128_000:
+                raise ValueError("script must contain between 1 and 128000 UTF-8 bytes")
+            import base64 as _base64
+            encoded = _base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+            argv = ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
+            if dry_run:
+                return envelope(request_id=request_id, results=[{"dry_run": True, "script_bytes": len(script.encode("utf-8"))}], started=started)
+            result = shell_engine.run(
+                execution, argv, resolve_shell_cwd("."), timeout_seconds=timeout_seconds,
+                include_stdout=include_stdout, include_stderr=include_stderr,
+                unrestricted=True,
+            )
+            return envelope(request_id=request_id, changed=True, results=[{"result": result}], task_id=result.get("job_id"), started=started)
+        except Exception as error:
+            return failed(error, request_id=request_id, started=started, backend="windows_automation")
+    @mcp.tool(description="Read or act on native Accessibility elements via the selected Windows UI Automation or macOS backend. No coordinate or OCR fallback.")
     @threaded
     def accessibility(
         action: AccessibilityAction, parameters: dict[str, Any] | None = None, display_id: str | None = None,
@@ -531,7 +635,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
         except Exception as error:
             return failed(error, request_id=request_id, started=started, backend="accessibility")
 
-    @mcp.tool(description="Send explicit keyboard input only: type text, paste text, press a key, or press a hotkey. display_id identifies the intended workspace but keyboard focus remains macOS-global.")
+    @mcp.tool(description="Send explicit keyboard input only: type text, paste text, press a key, or press a hotkey. display_id identifies the intended workspace but keyboard focus remains operating-system-global.")
     @threaded
     def keyboard(
         action: KeyboardAction, text: str | None = None, key: str | None = None,

@@ -9,4 +9,8 @@ TOOL_NAMES = (
     "keyboard",
     "mouse",
     "vision",
+    "filesystem",
+    "batch_read",
+    "diagnostics",
+    "windows_automation",
 )

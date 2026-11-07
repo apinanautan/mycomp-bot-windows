@@ -15,6 +15,18 @@ class WindowsHostTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+    def test_capture_window_uses_selected_uia_bounds_without_input(self):
+        from windows import MyCompBot as app
+        instance = app.MyCompBot.__new__(app.MyCompBot)
+        instance.automation = MagicMock()
+        instance.capture = MagicMock()
+        instance.automation.execute.return_value = {"windows": [{"handle": 123, "bounds": {"x": 12, "y": 34, "width": 640, "height": 480}}]}
+        instance.capture.capture.return_value = {"path": "capture.png", "bounds": {"x": 12, "y": 34, "width": 640, "height": 480}}
+        result = instance._execute_ui({"action": "capture_window", "handle": 123})
+        instance.capture.capture.assert_called_once_with({"x": 12, "y": 34, "width": 640, "height": 480})
+        self.assertEqual(result["window"]["handle"], 123)
+        with self.assertRaises(ValueError):
+            instance._execute_ui({"action": "capture_window"})
     def test_funnel_endpoint_uses_this_installation_domain_port_and_path(self):
         from windows import MyCompBot as app
         app._configure_tailscale_endpoint("https://another.tailnet.ts.net:8443/bot")
