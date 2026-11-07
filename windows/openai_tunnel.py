@@ -9,6 +9,7 @@ import socket
 import subprocess
 import time
 import urllib.request
+from urllib.parse import urlsplit
 
 
 LOCAL_MCP_ENDPOINT = "http://127.0.0.1:8645/mcp"
@@ -303,6 +304,29 @@ STEP 5 — ตรวจรับและรายงานตรงตามจ
         self.failures = 0
         self.error = ""
 
+    def _configured_oauth_origin(self) -> str | None:
+        """Trust only the HTTPS OAuth origin the user configured for this MyComp Bot."""
+        public_url = os.environ.get("MYCOMP_PUBLIC_BASE_URL", "").strip()
+        if not public_url:
+            try:
+                for line in (self.directory.parent / ".env").read_text(encoding="utf-8-sig").splitlines():
+                    if line.strip().startswith("MYCOMP_PUBLIC_BASE_URL="):
+                        public_url = line.split("=", 1)[1].strip().strip(chr(34) + chr(39))
+                        break
+            except OSError:
+                return None
+        try:
+            parsed = urlsplit(public_url)
+            if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+                return None
+            if parsed.hostname.endswith(".invalid") or parsed.hostname == "localhost":
+                return None
+            if not parsed.port or parsed.port == 443:
+                return f"https://{parsed.hostname.lower()}"
+            return f"https://{parsed.hostname.lower()}:{parsed.port}"
+        except ValueError:
+            return None
+
     def start(self):
         config = self.load()
         if not config.get("enabled") or self.process is not None:
@@ -313,6 +337,18 @@ STEP 5 — ตรวจรับและรายงานตรงตามจ
         validate(config["tunnel_id"], key)
         self.health.unlink(missing_ok=True)
         environment = {**os.environ, "CONTROL_PLANE_API_KEY": key}
+        # The local MCP origin and the public OAuth authorization-server origin
+        # differ. Current tunnel-client versions deny cross-origin discovery
+        # unless the exact HTTPS origin was explicitly configured by this app.
+        origin = self._configured_oauth_origin()
+        if origin:
+            environment["MCP_OAUTH_TRUSTED_ORIGINS"] = origin
+            environment["HARPOON_OAUTH_FORWARD_ORIGINS"] = origin
+            local_binding = urlsplit(self.mcp_endpoint)
+            if local_binding.scheme == "http" and local_binding.hostname in {"127.0.0.1", "::1"}:
+                # OAuth discovery needs only this owned loopback HTTP MCP target.
+                # This is not an anonymous/public MCP endpoint or a generic proxy.
+                environment["HARPOON_ALLOW_PLAINTEXT_HTTP"] = "true"
         # ponytail: one owned runtime; use channel-aware profiles if multiple MCP servers are needed.
         self.log = (self.directory / "runtime.log").open("w", encoding="utf-8")
         try:

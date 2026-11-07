@@ -1,3 +1,22 @@
+## Version 1.1.29 — automatic OAuth discovery over OpenAI Secure MCP Tunnel
+
+MyComp Bot now automatically configures OpenAI tunnel-client's independent
+OAuth discovery trusted-origin and OAuth forwarding-origin allowlists on
+startup from the application's existing configured HTTPS public URL.
+It also enables loopback HTTP Harpoon discovery only when the MCP backend
+is explicitly bound to loopback. No manual PowerShell patch, advanced OAuth
+URL entry, new Tunnel ID, channel, or API key is needed for this configuration.
+
+The selected tunnel-client must support these settings (v0.0.20 or later
+for OAuth forwarding to a distinct HTTPS origin). The existing ChatGPT
+workspace must still authorize the Tunnel plugin and OAuth consent. Windows
+client readiness is not proof of ChatGPT authenticated tools/list success.
+
+Install by using the existing in-app Update MyComp Bot button and
+confirming the update. The updater preserves per-user MyComp Bot settings.
+The app will restart with the new launch configuration; OAuth should be
+retested through the same previously selected Tunnel ID.
+
 ## Version 1.1.28 — Windows Capability Winsock hotfix
 
 Fixed the sanitized Python subprocess environment used by MyComp Bot
