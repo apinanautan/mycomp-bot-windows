@@ -583,7 +583,7 @@ class MyCompBot(tk.Tk):
         name = simpledialog.askstring(
             "ตั้งชื่อปลั๊กอิน",
             "ชื่อหลักปลั๊กอิน (เชื่อม Tailscale ด้วยตัวเองแล้ว):",
-            initialvalue=socket.gethostname(),
+            initialvalue="MyComp Bot",
             parent=parent,
         )
         if name is None:
@@ -605,9 +605,9 @@ class MyCompBot(tk.Tk):
         viewer.columnconfigure(0, weight=1)
         viewer.rowconfigure(1, weight=1)
         instructions = (
-            "เชื่อม Tailscale กับ ChatGPT ด้วยตัวเองก่อน จากนั้นคัดลอกพรอมต์นี้ไปส่งให้ ChatGPT "
-            "เพื่อตรวจของเดิมและติดตั้ง Tunnel/Channel, Remote Desktop Commander, Skills "
-            "และไอคอนที่ยังขาดจนเสร็จ (ไม่ต้องใส่ API key ในแชท)"
+            "ใช้ชื่อหลักที่กรอก: จัดชื่อเป็น [ชื่อหลัก] Tailscale / [ชื่อหลัก] Tunnel "
+            "ตรวจ Tunnel ให้สำเร็จก่อน แล้วแบ่งจอเดียว ChatGPT ซ้าย / Chrome งานขวา "
+            "(อย่าเปลี่ยนชื่อ Studio หรือแอปอื่น และอย่าใส่ API key ในแชท)"
         )
         ttk.Label(viewer, text=instructions, wraplength=770, justify="left").grid(
             row=0, column=0, columnspan=2, padx=12, pady=(12, 4), sticky="w"
@@ -625,23 +625,11 @@ class MyCompBot(tk.Tk):
             viewer.clipboard_append(prompt)
             viewer.update_idletasks()
 
-        def open_creator() -> None:
-            copy_prompt()
-            # Use the known public Plugin Creator page, not an undocumented
-            # query-string prompt that might auto-send or leak the Tunnel ID.
-            webbrowser.open(
-                "https://chatgpt.com/"
-            )
-
         actions = ttk.Frame(viewer)
         actions.grid(row=2, column=0, columnspan=2, padx=12, pady=(2, 12), sticky="e")
-        ttk.Button(actions, text="คัดลอกพรอมต์", command=copy_prompt).pack(side="left", padx=5)
-        ttk.Button(actions, text="เปิด ChatGPT", command=open_creator).pack(
-            side="left", padx=5
-        )
+        ttk.Button(actions, text="คัดลอกพรอมต์ไปแชทเดิม", command=copy_prompt).pack(side="left", padx=5)
+        # Keep the active ChatGPT conversation; never open a new chat/tab automatically.
         copy_prompt()
-        if launch_chatgpt:
-            open_creator()
 
     def _openai_tunnel_settings(self):
         window = tk.Toplevel(self)

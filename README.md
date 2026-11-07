@@ -1,3 +1,20 @@
+## Version 1.1.26 — Tunnel-first setup and visible browser workspace
+
+The MyComp Bot setup prompt first checks the existing saved Secure MCP Tunnel ID,
+DPAPI-encrypted key, profiles, and main channel. It reuses working configuration,
+repairs only failed portions, and never regenerates credentials simply because they
+already exist. It verifies actual authenticated ChatGPT MCP access before proceeding.
+
+The setup prompt uses the name entered in MyComp Bot consistently for
+<name> Tailscale and <name> Tunnel, and forbids edits to unrelated
+Orchestrator, Studio, or other apps. An existing Tailscale plugin is renamed
+only if the owner has the rights and the platform supports editing its name.
+
+Chrome CDP opens a visible, separate-profile worker window in the right half
+of the primary screen, preserves the existing ChatGPT window on the left,
+and reuses the worker tab for sequential tasks. The prompt no longer opens
+another ChatGPT tab when copied.
+
 # MyComp Bot for Windows
 
 MyComp Bot คือ MCP server ที่รันบนเครื่อง Windows ของเรา เพื่อให้ ChatGPT เรียกใช้เครื่องนั้นผ่าน connector ได้ โดยตัวโปรแกรมรันในเครื่องและเก็บค่าไว้ในบัญชี Windows ปัจจุบัน การเชื่อมต่อใช้ HTTPS ของ Tailscale Funnel

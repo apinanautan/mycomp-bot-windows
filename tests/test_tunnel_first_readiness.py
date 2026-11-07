@@ -15,6 +15,18 @@ class TunnelFirstReadinessTests(unittest.TestCase):
                 self.assertIn(text, prompt)
             self.assertNotIn('sk-SECRET', prompt)
 
+    def test_prompt_reuses_saved_tunnel_and_skips_completed_setup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tunnel = Tunnel(Path(directory))
+            prompt = tunnel.plugin_prompt("MyComp Bot", "https://example.ts.net/mycomp")
+            assert "MyComp Bot Tailscale" in prompt
+            assert "MyComp Bot Tunnel" in prompt
+            for phrase in ("key.dpapi", "ห้ามสร้าง Tunnel, Channel, Key", "เสร็จแล้ว/ข้าม",
+                           "ซ่อมเฉพาะจุดเดิม", "ChatGPT ซ้าย", "Chrome ทำงานขวา",
+                           "Orchestrator"):
+                self.assertIn(phrase, prompt)
+            self.assertLess(prompt.index("STEP 1"), prompt.index("STEP 2"))
+
     def test_status_distinguishes_auth_required_from_authenticated(self):
         with tempfile.TemporaryDirectory() as directory:
             tunnel = Tunnel(Path(directory))

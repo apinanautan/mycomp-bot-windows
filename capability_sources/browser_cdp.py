@@ -38,7 +38,7 @@ def _settings() -> dict[str, str]:
 
 def _display(payload: dict[str, Any]) -> dict[str, Any] | None:
     settings = _settings()
-    requested = str(payload.get("display_id", settings.get("MYCOMP_UI_DEFAULT_DISPLAY", "bot"))).strip().lower()
+    requested = str(payload.get("display_id") or "main").strip().lower()
     try:
         state = json.loads(_DISPLAY_STATE.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
@@ -52,19 +52,46 @@ def _display(payload: dict[str, Any]) -> dict[str, Any] | None:
     return next((item for item in displays if str(item.get("id")) == requested), None)
 
 
+def _workspace_screen_bounds(display: dict[str, Any] | None) -> dict[str, int] | None:
+    """One physical screen, split side-by-side; never choose another monitor by default."""
+    if display and isinstance(display.get("bounds"), dict):
+        bounds = display["bounds"]
+        try:
+            x, y, width, height = (int(float(bounds[k])) for k in ("x", "y", "width", "height"))
+            if width >= 900 and height >= 500:
+                return {"x": x, "y": y, "width": width, "height": height}
+        except (KeyError, TypeError, ValueError):
+            pass
+    if os.name == "nt":
+        import ctypes
+        user32 = ctypes.windll.user32
+        width, height = int(user32.GetSystemMetrics(0)), int(user32.GetSystemMetrics(1))
+        if width >= 900 and height >= 500:
+            return {"x": 0, "y": 0, "width": width, "height": height}
+    return None
+
+
 def _window_arguments(display: dict[str, Any] | None) -> list[str]:
-    if not display:
+    screen = _workspace_screen_bounds(display)
+    if not screen:
         return []
-    bounds = display.get("bounds") or {}
+    x, y, width, height = (screen[key] for key in ("x", "y", "width", "height"))
+    left_width = width // 2
+    # Place only the dedicated automation browser; do not navigate or close ChatGPT.
+    return [f"--window-position={x + left_width},{y}", f"--window-size={width - left_width},{height}"]
+
+
+_WORKSPACE_SESSION = _APP_DATA / "runtime" / "browser-workspace-session.json"
+
+
+def _workspace_session() -> dict[str, Any]:
     try:
-        x, y = int(float(bounds["x"])), int(float(bounds["y"]))
-        width, height = int(float(bounds["width"])), int(float(bounds["height"]))
-    except (KeyError, TypeError, ValueError):
-        return []
-    return [
-        f"--window-position={x + 12},{y + 36}",
-        f"--window-size={max(width - 24, 640)},{max(height - 48, 480)}",
-    ]
+        data = json.loads(_WORKSPACE_SESSION.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 
 _CDP_PORT_STATE = _APP_DATA / "runtime" / "browser-cdp-port.txt"
 
@@ -254,23 +281,32 @@ def execute(payload):
     port = _port(payload)
 
     if action == "launch":
+        session = _workspace_session()
         if _port_is_busy(port):
-            try:
-                version = _json_request(port, "/json/version")
-                return {"launched": False, "reused": True, "port": port, "browser": version.get("Browser")}
-            except (OSError, urllib.error.URLError):
-                if "port" in payload:
-                    raise RuntimeError(f"port {port} is occupied without Chrome CDP")
-                free = next((p for p in range(9222, 9323) if not _port_is_busy(p)), None)
-                if free is None:
-                    raise RuntimeError("no available Chrome CDP port")
-                port = free
-        profile_raw = str(payload.get("profile", _settings().get("MYCOMP_BROWSER_PROFILE", str(_DEFAULT_PROFILE) + f"-{port}")))
+            if session.get("port") == port and session.get("mode") == "visible-half-screen":
+                try:
+                    version = _json_request(port, "/json/version")
+                    return {"launched": False, "reused": True, "port": port,
+                            "browser": version.get("Browser"), "workspace": "visible-half-screen"}
+                except (OSError, urllib.error.URLError):
+                    pass
+            # Never take control of the user's normal Chrome or a previous headless instance.
+            if "port" in payload:
+                raise RuntimeError(f"port {port} is already occupied by a different browser/service")
+            free = next((candidate for candidate in range(9222, 9323) if not _port_is_busy(candidate)), None)
+            if free is None:
+                raise RuntimeError("no available Chrome CDP port in 9222-9322")
+            port = free
+        profile_raw = str(payload.get("profile", str(_DEFAULT_PROFILE) + f"-work-{port}"))
         profile = Path(os.path.expandvars(profile_raw)).expanduser()
         profile.mkdir(parents=True, exist_ok=True)
-        url = str(payload.get("url", "about:blank"))
+        url = str(payload.get("url", "about:blank")).strip()
+        if url.startswith("-"):
+            raise ValueError("browser URL must not be a Chrome command-line flag")
         display = _display(payload)
-        arguments = ["--headless=new", "--disable-gpu", "--remote-debugging-address=127.0.0.1", f"--remote-debugging-port={port}", f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check"]
+        arguments = ["--remote-debugging-address=127.0.0.1", f"--remote-debugging-port={port}",
+                     f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
+                     "--new-window", *_window_arguments(display), url]
         if os.name == "nt":
             candidates = [
                 Path(os.environ.get("PROGRAMFILES", "C:/Program Files")) / "Google/Chrome/Application/chrome.exe",
@@ -289,7 +325,10 @@ def execute(payload):
                 version = _json_request(port, "/json/version")
                 _CDP_PORT_STATE.parent.mkdir(parents=True, exist_ok=True)
                 _CDP_PORT_STATE.write_text(str(port), encoding="ascii")
-                return {"launched": True, "port": port, "profile": str(profile), "browser": version.get("Browser"), "websocket": version.get("webSocketDebuggerUrl"), "display": display}
+                _WORKSPACE_SESSION.write_text(json.dumps({"port": port, "mode": "visible-half-screen", "profile": str(profile)}), encoding="utf-8")
+                return {"launched": True, "port": port, "profile": str(profile), "browser": version.get("Browser"),
+                        "websocket": version.get("webSocketDebuggerUrl"), "display": display,
+                        "workspace": "visible-half-screen", "window_arguments": _window_arguments(display)}
             except (OSError, urllib.error.URLError):
                 time.sleep(0.2)
         raise TimeoutError("Chrome CDP did not become ready")
@@ -305,8 +344,20 @@ def execute(payload):
         return {"tabs": [{key: item.get(key) for key in ("id", "title", "url", "type", "webSocketDebuggerUrl")} for item in _tabs(port)]}
 
     if action == "new_tab":
-        url = urllib.parse.quote(str(payload.get("url", "about:blank")), safe=":/?&=#")
-        return _json_request(port, "/json/new?" + url, method="PUT")
+        url = str(payload.get("url", "about:blank"))
+        # Default one-task/one-tab policy: reuse the worker tab across sequential jobs.
+        if not payload.get("allow_additional_tab", False):
+            try:
+                tab = _tab(port, {})
+            except KeyError:
+                tab = None
+            if tab is not None:
+                if tab.get("url") != url:
+                    _with_tab({**payload, "tab_id": tab["id"]},
+                              lambda client, _: client.call("Page.navigate", {"url": url}))
+                return {"id": tab["id"], "type": "page", "url": url, "reused": True}
+        quoted = urllib.parse.quote(url, safe=":/?&=#")
+        return _json_request(port, "/json/new?" + quoted, method="PUT")
 
     if action == "close_tab":
         tab = _tab(port, payload)
