@@ -52,6 +52,16 @@ class WindowsMcpExtensionTests(unittest.TestCase):
         invalid = self.call("batch_read", paths=["a.txt"] * 21)
         self.assertEqual(invalid["status"], "failed")
 
+    def test_vision_forwards_windows_window_selector(self):
+        from unittest.mock import patch
+        from mycomp_bot_engine import server as module
+        with patch.object(self.server._mycomp_resources.capabilities, "execute", return_value={"ok": True, "result": {"width": 10}}) as bridge:
+            result = self.call("vision", action="capture_window", app={"handle": 1234, "name_contains": "Test"})
+        self.assertEqual(result["status"], "completed")
+        name, payload = bridge.call_args.args
+        self.assertEqual(payload["handle"], 1234)
+        self.assertEqual(payload["name_contains"], "Test")
+        self.assertEqual(payload["action"], "capture_window")
     def test_windows_automation_requires_full_control(self):
         denied = self.call("windows_automation", script="Write-Output ok", dry_run=True)
         self.assertEqual(denied["status"], "failed")

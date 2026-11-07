@@ -1285,9 +1285,9 @@ class MyCompBot(tk.Tk):
         # /readyz is a local runtime probe, NOT evidence of a ChatGPT connector call.
         try:
             tunnel_status = self.openai_tunnel.status()
-            if tunnel_status.startswith("Runtime ready;"):
+            if tunnel_status.startswith(("Tunnel main active;", "Tunnel main connected;", "Tunnel connected;", "Runtime ready;")):
                 result = ("amber", "Ready; not verified")
-            elif tunnel_status.startswith(("Starting;", "Runtime running;")):
+            elif tunnel_status.startswith(("Starting;", "Runtime running;", "Tunnel running;", "Tunnel main MCP probe failed;", "Tunnel control plane not ready")):
                 result = ("amber", "Starting / unverified")
             else:
                 result = ("red", "Not connected")

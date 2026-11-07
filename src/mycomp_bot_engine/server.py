@@ -717,7 +717,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
             if region:
                 payload["region"] = region
             if app:
-                payload.update({key: value for key, value in app.items() if key in {"bundle_id", "pid", "app_name"}})
+                payload.update({key: value for key, value in app.items() if key in {"bundle_id", "pid", "process_id", "app_name", "handle", "name", "name_contains"}})
             if action == "capture_window":
                 payload["window_index"] = window_index
             value = ui_result(action, payload, backend="vision")
