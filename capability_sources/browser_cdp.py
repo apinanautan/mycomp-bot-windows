@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import base64
 import hashlib
@@ -66,12 +66,25 @@ def _window_arguments(display: dict[str, Any] | None) -> list[str]:
         f"--window-size={max(width - 24, 640)},{max(height - 48, 480)}",
     ]
 
+_CDP_PORT_STATE = _APP_DATA / "runtime" / "browser-cdp-port.txt"
+
 def _port(payload: dict[str, Any]) -> int:
-    settings = _settings()
-    port = int(payload.get("port", settings.get("MYCOMP_BROWSER_CDP_PORT", "9222")))
+    port = int(payload.get("port", _settings().get("MYCOMP_BROWSER_CDP_PORT", "9222")))
+    if "port" not in payload:
+        try:
+            saved = int(_CDP_PORT_STATE.read_text(encoding="ascii").strip())
+            if 9222 <= saved <= 9322:
+                port = saved
+        except (OSError, ValueError):
+            pass
     if not 9222 <= port <= 9322:
         raise ValueError("CDP port must be between 9222 and 9322")
     return port
+
+def _port_is_busy(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
+        connection.settimeout(0.4)
+        return connection.connect_ex(("127.0.0.1", port)) == 0
 
 
 def _enabled() -> bool:
@@ -241,12 +254,23 @@ def execute(payload):
     port = _port(payload)
 
     if action == "launch":
-        profile_raw = str(payload.get("profile", _settings().get("MYCOMP_BROWSER_PROFILE", _DEFAULT_PROFILE)))
+        if _port_is_busy(port):
+            try:
+                version = _json_request(port, "/json/version")
+                return {"launched": False, "reused": True, "port": port, "browser": version.get("Browser")}
+            except (OSError, urllib.error.URLError):
+                if "port" in payload:
+                    raise RuntimeError(f"port {port} is occupied without Chrome CDP")
+                free = next((p for p in range(9222, 9323) if not _port_is_busy(p)), None)
+                if free is None:
+                    raise RuntimeError("no available Chrome CDP port")
+                port = free
+        profile_raw = str(payload.get("profile", _settings().get("MYCOMP_BROWSER_PROFILE", str(_DEFAULT_PROFILE) + f"-{port}")))
         profile = Path(os.path.expandvars(profile_raw)).expanduser()
         profile.mkdir(parents=True, exist_ok=True)
         url = str(payload.get("url", "about:blank"))
         display = _display(payload)
-        arguments = ["--headless=new", "--disable-gpu", "--remote-debugging-address=127.0.0.1", f"--remote-debugging-port={port}", f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check", "--enable-logging", "--log-file=C:/mycomp-chrome-debug.log"]
+        arguments = ["--headless=new", "--disable-gpu", "--remote-debugging-address=127.0.0.1", f"--remote-debugging-port={port}", f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check"]
         if os.name == "nt":
             candidates = [
                 Path(os.environ.get("PROGRAMFILES", "C:/Program Files")) / "Google/Chrome/Application/chrome.exe",
@@ -263,6 +287,8 @@ def execute(payload):
         while time.monotonic() < deadline:
             try:
                 version = _json_request(port, "/json/version")
+                _CDP_PORT_STATE.parent.mkdir(parents=True, exist_ok=True)
+                _CDP_PORT_STATE.write_text(str(port), encoding="ascii")
                 return {"launched": True, "port": port, "profile": str(profile), "browser": version.get("Browser"), "websocket": version.get("webSocketDebuggerUrl"), "display": display}
             except (OSError, urllib.error.URLError):
                 time.sleep(0.2)
