@@ -239,7 +239,7 @@ def redirect_launchers(previous: Path, installed: Path, log) -> None:
         "$ErrorActionPreference='Stop';"
         "$shell=New-Object -ComObject WScript.Shell;"
         "$links=@("
-        "[IO.Path]::Combine([Environment]::GetFolderPath('Desktop'),'MyComp Bot.lnk'),"
+        "[IO.Path]::Combine([Environment]::GetFolderPath('DesktopDirectory'),'MyComp Bot.lnk'),"
         "[IO.Path]::Combine([Environment]::GetFolderPath('Programs'),'MyComp Bot.lnk'),"
         "[IO.Path]::Combine($env:APPDATA,'Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar\\MyComp Bot.lnk')"
         ");"
@@ -268,7 +268,7 @@ def redirect_launchers(previous: Path, installed: Path, log) -> None:
         "};"
         # Keep the user's existing Desktop shortcut (including custom icon)
         # even if it points to a different application. Create only if absent.
-        "$desktop=[IO.Path]::Combine([Environment]::GetFolderPath('Desktop'),'MyComp Bot.lnk');"
+        "$desktop=[IO.Path]::Combine([Environment]::GetFolderPath('DesktopDirectory'),'MyComp Bot.lnk');"
         "if(-not (Test-Path -LiteralPath $desktop)){"
         "$shortcut=$shell.CreateShortcut($desktop);"
         "$shortcut.TargetPath=$newExe;$shortcut.Arguments=([char]34+$newScript+[char]34);"

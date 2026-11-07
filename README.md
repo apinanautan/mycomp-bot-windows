@@ -1,3 +1,23 @@
+## Version 1.1.30 — Desktop shortcut and Tunnel connect workflow
+
+MyComp Bot's Windows installer now creates an actual "MyComp Bot.lnk"
+Desktop shortcut using the installed pythonw.exe, the application script,
+and its bundled MyComp icon. The app also repairs missing shortcuts on
+startup, including redirected OneDrive Desktop paths. It is idempotent
+and will not overwrite an unrelated shortcut with the same name.
+
+The "Save and connect" Tunnel button now truly enables and starts the
+saved local Tunnel client even when the reconnect checkbox was initially
+unchecked. "Save named ID/key" remains the separate save-without-activation
+option. The GUI explains that creating/installing the plugin in ChatGPT
+is a separate account/workspace action and that successful local Tunnel
+readiness does not itself install a ChatGPT plugin.
+
+Existing Tunnel ID, encrypted API key, OAuth channel and user settings
+remain intact across in-app updates. No new Tunnel or Key is generated
+automatically. The updater uses the Windows DesktopDirectory known
+folder to support redirected Desktop paths.
+
 ## Version 1.1.29 — automatic OAuth discovery over OpenAI Secure MCP Tunnel
 
 MyComp Bot now automatically configures OpenAI tunnel-client's independent

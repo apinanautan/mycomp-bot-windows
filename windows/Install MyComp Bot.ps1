@@ -168,6 +168,15 @@ if (-not $healthy) {
     throw "MyComp Bot did not become ready. Process exited: $($hostProcess.HasExited). Logs: $hostErrorLog and $hostOutputLog"
 }
 
+# A successful first install must also place a usable icon on the actual
+# Windows Desktop (including redirected/OneDrive Desktop paths). The GUI
+# repeats this idempotently on startup so old installs also self-repair.
+$shortcutCode = 'import sys; sys.path.insert(0, sys.argv[1]); from windows.desktop_shortcut import ensure_desktop_shortcut; print("Desktop shortcut: " + ensure_desktop_shortcut(sys.argv[1]))'
+& $venvPython -c $shortcutCode $root
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning "MyComp Bot is running, but its Desktop shortcut could not be created. Check this Windows user's Desktop permissions."
+}
+
 Set-Clipboard -Value $endpoint
 Write-Host ''
 Write-Host 'MyComp Bot is running.' -ForegroundColor Green

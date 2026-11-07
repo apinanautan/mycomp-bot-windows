@@ -40,10 +40,11 @@ import pystray
 from PIL import Image, ImageDraw, ImageTk
 
 if __package__:
-    from . import app_update, remote_commander_presence
+    from . import app_update, remote_commander_presence, desktop_shortcut
 else:
     import app_update
     import remote_commander_presence
+    import desktop_shortcut
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -76,10 +77,18 @@ def _refresh_existing_shortcut_icons() -> None:
     if not APP_ICON_ICO.is_file():
         return
     try:
+        result = desktop_shortcut.ensure_desktop_shortcut(ROOT)
+        if result == "conflict":
+            logging.getLogger(__name__).warning(
+                "MyComp Bot desktop shortcut name is used by a different target; left unchanged"
+            )
+    except Exception as error:
+        logging.getLogger(__name__).warning("Desktop shortcut creation failed: %s", error)
+    try:
         import win32com.client
         shell = win32com.client.Dispatch("WScript.Shell")
         locations = [
-            Path.home() / "Desktop" / "MyComp Bot.lnk",
+            desktop_shortcut.windows_desktop_directory() / "MyComp Bot.lnk",
             Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" /
             "Start Menu" / "Programs" / "MyComp Bot.lnk",
         ]
@@ -669,16 +678,18 @@ class MyCompBot(tk.Tk):
         def save():
             nonlocal key_saved
             try:
+                # The button promises connection. Saving-only is available
+                # through "Save named ID/key" below this control.
+                enabled.set(True)
                 name = profile_name.get().strip()
                 if name:
                     info = self.openai_tunnel.save_profile(name, tunnel_id.get(), key.get())
-                    if enabled.get():
-                        self.openai_tunnel.activate_profile(name)
+                    self.openai_tunnel.activate_profile(name)
                     key_saved = info["has_api_key"]
                 elif self.openai_tunnel.active_profile_name:
                     raise ValueError("Select the active named profile before editing.")
                 else:
-                    self.openai_tunnel.save(tunnel_id.get(), key.get(), enabled.get())
+                    self.openai_tunnel.save(tunnel_id.get(), key.get(), True)
                     key_saved = self.openai_tunnel.secret.is_file()
                 key.set("")
                 update_saved_key_indicator()
@@ -692,7 +703,13 @@ class MyCompBot(tk.Tk):
         ttk.Button(window, text="Save and connect", command=save).grid(row=3, column=0, padx=12, pady=8)
         ttk.Button(window, text="Test readiness", command=lambda: status.set(self.openai_tunnel.status())).grid(row=3, column=1, padx=12, pady=8)
         ttk.Label(window, textvariable=status, wraplength=650).grid(row=4, column=0, columnspan=2, padx=12, pady=8)
-        ttk.Label(window, text="Key is encrypted for this Windows user. Each new machine needs its own setup.", wraplength=650).grid(row=5, column=0, columnspan=2, padx=12, pady=8)
+        ttk.Label(
+            window,
+            text="Save and connect starts the local Tunnel Client and main MCP connection. "
+                 "The ChatGPT plugin must still be installed and authorized separately in the ChatGPT account/workspace. "
+                 "The API key is encrypted for this Windows user.",
+            wraplength=650,
+        ).grid(row=5, column=0, columnspan=2, padx=12, pady=8)
 
         # Named profiles are stored on this Windows PC, separately from the
         # already working legacy Tunnel ID and encrypted credential.
