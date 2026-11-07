@@ -122,23 +122,35 @@ Set-EnvValue $configPath 'MYCOMP_ALLOW_SHELL' 'true' -OnlyIfMissing
 Set-EnvValue $configPath 'MYCOMP_ALLOWED_EXECUTABLES' 'C:\Windows\System32\cmd.exe,C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -OnlyIfMissing
 Set-EnvValue $configPath 'MYCOMP_SHELL_PATH' 'C:\Windows\System32;C:\Windows;C:\Windows\System32\WindowsPowerShell\v1.0' -OnlyIfMissing
 
-$funnel = (& $tailscale funnel status --json 2>$null | ConvertFrom-Json)
-$funnelKey = "${dnsName}:443"
+$funnelResult = & $tailscale funnel status --json 2>$null
+if ($LASTEXITCODE -ne 0) {
+    throw 'Could not inspect existing Funnel routes. No Funnel routes were changed.'
+}
+$funnel = $funnelResult | ConvertFrom-Json
+$funnelKey = $dnsName + ':443'
 $existing = if ($funnel -and $funnel.Web) { $funnel.Web.PSObject.Properties[$funnelKey] } else { $null }
-$useTailscale = $true
-if ($existing) {
-    $rootHandler = $existing.Value.Handlers.PSObject.Properties['/']
-    $proxy = if ($rootHandler) { [string]$rootHandler.Value.Proxy } else { '' }
-    if ($proxy -and $proxy -ne $target) {
-        $useTailscale = $false
-        Write-Warning "Tailscale Funnel port 443 already belongs to another app ($proxy). MyComp Bot will not overwrite it; use the generated Free Temporary Tunnel URL instead."
+$handlers = if ($existing) { $existing.Value.Handlers } else { $null }
+$mycompHandler = if ($handlers) { $handlers.PSObject.Properties['/mycomp'] } else { $null }
+$rootHandler = if ($handlers) { $handlers.PSObject.Properties['/'] } else { $null }
+$mycompProxy = if ($mycompHandler) { ([string]$mycompHandler.Value.Proxy).TrimEnd('/') } else { '' }
+$rootProxy = if ($rootHandler) { ([string]$rootHandler.Value.Proxy).TrimEnd('/') } else { '' }
+if ($mycompProxy -eq $target) {
+    $baseUrl = "$baseUrl/mycomp"
+} elseif ($rootProxy -eq $target) {
+    # Preserve a working legacy installation served at the root.
+} elseif ($mycompProxy) {
+    throw 'Tailscale /mycomp is owned by another service; MyComp Bot will not overwrite it.'
+} else {
+    # Reserve a dedicated MyComp route without changing another service's /.
+    & $tailscale funnel --bg --yes --https=443 --set-path=/mycomp "$target/"
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Tailscale Funnel could not publish /mycomp. Check Funnel permissions for this tailnet.'
     }
+    $baseUrl = "$baseUrl/mycomp"
 }
-if ($useTailscale -and -not $existing) {
-    & $tailscale funnel --bg --yes --https=443 $target
-    if ($LASTEXITCODE -ne 0) { throw 'Tailscale Funnel could not be enabled. Confirm Funnel is allowed for this tailnet.' }
-}
-if ($useTailscale) { Set-EnvValue $configPath 'MYCOMP_PUBLIC_BASE_URL' $baseUrl }
+$endpoint = "$baseUrl/mcp"
+Set-EnvValue $configPath 'MYCOMP_PUBLIC_BASE_URL' $baseUrl
+Write-Host "Automatic MyComp public MCP URL: $endpoint" -ForegroundColor Green
 
 $app = Join-Path $PSScriptRoot 'MyCompBot.py'
 $hostOutputLog = Join-Path $configDir 'host-output.log'
@@ -177,6 +189,18 @@ if ($LASTEXITCODE -ne 0) {
     Write-Warning "MyComp Bot is running, but its Desktop shortcut could not be created. Check this Windows user's Desktop permissions."
 }
 
+# Never report the URL as public without checking the real external HTTPS
+# path. A new Funnel route can require a short ingress propagation delay.
+try {
+    $publicHealth = Invoke-RestMethod -Uri "$baseUrl/health" -TimeoutSec 9
+    if ($publicHealth.status -eq 'ok' -and $publicHealth.service -eq 'mycomp-bot') {
+        Write-Host "Public MCP link verified: $endpoint" -ForegroundColor Green
+    } else {
+        Write-Warning "MCP URL has been generated but public health did not confirm MyComp Bot. The app will continue automatic Funnel checks."
+    }
+} catch {
+    Write-Warning "MCP URL has been generated but public HTTPS is not verified yet. The app will retry and show the error."
+}
 Set-Clipboard -Value $endpoint
 Write-Host ''
 Write-Host 'MyComp Bot is running.' -ForegroundColor Green

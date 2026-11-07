@@ -40,11 +40,13 @@ import pystray
 from PIL import Image, ImageDraw, ImageTk
 
 if __package__:
-    from . import app_update, remote_commander_presence, desktop_shortcut
+    from . import app_update, remote_commander_presence, desktop_shortcut, tailscale_endpoint, plugin_setup_copy
 else:
     import app_update
     import remote_commander_presence
     import desktop_shortcut
+    import tailscale_endpoint
+    import plugin_setup_copy
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -588,15 +590,59 @@ class WindowsUIAutomation:
 
 
 class MyCompBot(tk.Tk):
+    def _store_plugin_base_name(self) -> str:
+        name = plugin_setup_copy.base_name(self.plugin_base_name.get())
+        values = _read_env()
+        if values.get("MYCOMP_PLUGIN_BASE_NAME") != name:
+            values["MYCOMP_PLUGIN_BASE_NAME"] = name
+            _write_env(values)
+        self.plugin_base_name.set(name)
+        return name
+
+    def _save_plugin_base_name_click(self) -> None:
+        try:
+            name = self._store_plugin_base_name()
+            self.plugin_copy_status.set(
+                f"บันทึกชื่อหลัก {name} แล้ว (ยังไม่ได้เปลี่ยนชื่อปลั๊กอินใน ChatGPT)"
+            )
+        except (OSError, ValueError) as error:
+            self.plugin_copy_status.set(f"บันทึกชื่อไม่ได้: {error}")
+
+    def _copy_plugin_setup_field(self, kind: str) -> str | None:
+        try:
+            name = self._store_plugin_base_name()
+            value = plugin_setup_copy.copy_value(kind, name, self.openai_tunnel.load())
+            self.clipboard_clear()
+            self.clipboard_append(value)
+            self.update_idletasks()
+            labels = {
+                "tailscale_name": "ชื่อ Tailscale",
+                "tunnel_name": "ชื่อ Tunnel",
+                "tunnel_id": "Tunnel ID",
+                "channel_name": "ชื่อ Channel (main)",
+                "channel_id": "Channel ID",
+            }
+            self.plugin_copy_status.set(f"คัดลอก{labels[kind]}แล้ว")
+            return value
+        except (OSError, ValueError, KeyError) as error:
+            self.plugin_copy_status.set(f"ยังคัดลอกไม่ได้: {error}")
+            return None
+
     def _show_plugin_prompt(self, parent: tk.Misc, launch_chatgpt: bool = False) -> None:
         name = simpledialog.askstring(
             "ตั้งชื่อปลั๊กอิน",
             "ชื่อหลักปลั๊กอิน (เชื่อม Tailscale ด้วยตัวเองแล้ว):",
-            initialvalue="MyComp Bot",
+            initialvalue=self.plugin_base_name.get().strip() or "MyComp Bot",
             parent=parent,
         )
         if name is None:
             return  # Cancel: do not construct or copy any prompt.
+        try:
+            self.plugin_base_name.set(plugin_setup_copy.base_name(name))
+            name = self._store_plugin_base_name()
+        except (OSError, ValueError) as error:
+            messagebox.showwarning("ชื่อปลั๊กอิน", str(error), parent=parent)
+            return
         # Only the saved public base is passed; no API key, token or .env body.
         tailscale_base = _read_env().get("MYCOMP_PUBLIC_BASE_URL", "")
         try:
@@ -637,6 +683,9 @@ class MyCompBot(tk.Tk):
         actions = ttk.Frame(viewer)
         actions.grid(row=2, column=0, columnspan=2, padx=12, pady=(2, 12), sticky="e")
         ttk.Button(actions, text="คัดลอกพรอมต์ไปแชทเดิม", command=copy_prompt).pack(side="left", padx=5)
+        ttk.Button(actions, text="คัดลอกชื่อ Tailscale", command=lambda: self._copy_plugin_setup_field("tailscale_name")).pack(side="left", padx=5)
+        ttk.Button(actions, text="คัดลอกชื่อ Tunnel", command=lambda: self._copy_plugin_setup_field("tunnel_name")).pack(side="left", padx=5)
+        ttk.Button(actions, text="คัดลอก Tunnel ID", command=lambda: self._copy_plugin_setup_field("tunnel_id")).pack(side="left", padx=5)
         # Keep the active ChatGPT conversation; never open a new chat/tab automatically.
         copy_prompt()
 
@@ -855,6 +904,7 @@ class MyCompBot(tk.Tk):
         self.tailscale_busy = False
         self.next_tailscale_rebind = 0.0
         self.tailscale_status = tk.StringVar(value="Public connection: checking...")
+        self.tailscale_discovery_queue: queue.Queue[tuple[str, str, str]] = queue.Queue()
         logger = logging.getLogger("mycomp.tailscale")
         if not logger.handlers:
             APP_DATA.mkdir(parents=True, exist_ok=True)
@@ -888,6 +938,8 @@ class MyCompBot(tk.Tk):
             values["MYCOMP_REMOTE_DESKTOP_COMMANDER_AUTOSTART"].lower() in {"1", "true", "yes", "on"}
         )
         self.remote_commander_autostart.set(self.remote_commander_autostart_enabled)
+        self.plugin_base_name = tk.StringVar(value=values.get("MYCOMP_PLUGIN_BASE_NAME", "MyComp Bot"))
+        self.plugin_copy_status = tk.StringVar(value="คัดลอกชื่อไปสร้างปลั๊กอินเองได้; ไม่ต้องเปิดพรอมต์")
         self.domain = tk.StringVar(value=values["MYCOMP_PUBLIC_BASE_URL"])
         self.callback = tk.StringVar(value=values["MYCOMP_OAUTH_REDIRECT_URIS"])
         self.roots = tk.StringVar(value=values["MYCOMP_ALLOWED_ROOTS"])
@@ -902,8 +954,9 @@ class MyCompBot(tk.Tk):
         self.after(0, self._start)
         if self.remote_commander_autostart.get():
             self.after(1500, lambda: self._start_remote_commander(manual=False))
-        if not self.domain.get().strip():
-            self.after(250, self._start_tunnel)
+        # Never start a temporary Cloudflare tunnel simply because an install
+        # is missing the Tailscale URL; auto-detect the actual machine instead.
+        self.after(250, self._start_tailscale_discovery)
         self.after(200, self._poll)
         threading.Thread(target=self._autofix_watchdog_loop, daemon=True, name="mycomp-tailscale-watchdog").start()
         self.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
@@ -937,11 +990,43 @@ class MyCompBot(tk.Tk):
             healthbar, text="Check now", command=self._refresh_connection_status,
             style="MyComp.TButton",
         ).grid(row=0, column=3, rowspan=2, sticky="e", padx=(4, 0))
+        ttk.Label(healthbar, text="ชื่อหลัก", style="MyComp.TLabel").grid(
+            row=3, column=0, sticky="w", pady=(7, 0)
+        )
+        ttk.Entry(healthbar, textvariable=self.plugin_base_name).grid(
+            row=3, column=1, columnspan=2, sticky="ew", padx=(5, 5), pady=(7, 0)
+        )
+        ttk.Button(
+            healthbar, text="บันทึกชื่อ",
+            command=self._save_plugin_base_name_click,
+            style="MyComp.TButton",
+        ).grid(row=3, column=3, sticky="e", pady=(7, 0))
+        copy_bar = ttk.Frame(healthbar)
+        copy_bar.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(8, 2))
+        quick_actions = (
+            ("คัดลอกชื่อ Tailscale", "tailscale_name"),
+            ("คัดลอกชื่อ Tunnel", "tunnel_name"),
+            ("คัดลอก Tunnel ID", "tunnel_id"),
+            ("คัดลอก Channel main", "channel_name"),
+            ("Channel ID (ถ้ามี)", "channel_id"),
+        )
+        for index, (label, kind) in enumerate(quick_actions):
+            ttk.Button(
+                copy_bar, text=label,
+                command=lambda selected=kind: self._copy_plugin_setup_field(selected),
+            ).grid(row=index // 3, column=index % 3, padx=(0, 5),
+                   pady=(0, 4), sticky="ew")
+        for index in range(3):
+            copy_bar.columnconfigure(index, weight=1)
+        ttk.Label(
+            healthbar, textvariable=self.plugin_copy_status,
+            style="MyComp.TLabel",
+        ).grid(row=5, column=0, columnspan=4, sticky="w")
         ttk.Button(
             healthbar, text="สร้างพรอมต์ตั้งค่า MyComp Bot",
             command=lambda: self._show_plugin_prompt(self, launch_chatgpt=False),
             style="MyComp.TButton",
-        ).grid(row=3, column=0, columnspan=4, sticky="ew", pady=(9, 0))
+        ).grid(row=6, column=0, columnspan=4, sticky="ew", pady=(9, 0))
         ttk.Label(
             healthbar, textvariable=self.connection_checked_at, style="MyComp.TLabel",
         ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(5, 0))
@@ -1200,7 +1285,58 @@ class MyCompBot(tk.Tk):
 
     def _refresh_endpoint(self) -> None:
         origin = self.temporary_url or self.domain.get().strip()
-        self.endpoint.set(f"{origin.rstrip('/')}/mcp" if origin else "Configure your own public HTTPS domain or start a temporary tunnel.")
+        self.endpoint.set(
+            f"{origin.rstrip('/')}/mcp" if origin
+            else "Discovering Tailscale public MCP URL..."
+        )
+
+    def _start_tailscale_discovery(self) -> None:
+        configured = self.domain.get().strip()
+        threading.Thread(
+            target=self._tailscale_discovery_worker,
+            args=(configured,),
+            daemon=True,
+            name="mycomp-tailscale-url-discovery",
+        ).start()
+
+    def _tailscale_discovery_worker(self, configured: str) -> None:
+        try:
+            url, note = tailscale_endpoint.read_current_url(
+                _tailscale_command(), configured=configured
+            )
+            self.tailscale_discovery_queue.put((configured, url, note))
+        except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as error:
+            self.tailscale_discovery_queue.put((configured, "", str(error)))
+
+    def _accept_tailscale_discovery(self, configured: str, url: str, note: str) -> None:
+        # Don't overwrite user edits made while the background query ran.
+        if self.domain.get().strip() != configured:
+            return
+        if not url:
+            self.tailscale_status.set("Tailscale auto-discovery unavailable: " + note)
+            return
+        if url != configured:
+            self.domain.set(url)
+            values = _read_env()
+            values["MYCOMP_PUBLIC_BASE_URL"] = url
+            _write_env(values)
+            # OAuth issuer/resource metadata is constructed at Engine startup;
+            # apply a newly discovered base URL to the running Engine exactly
+            # once, otherwise the GUI URL and OAuth response would disagree.
+            if self.process is not None and self.process.poll() is None:
+                self._stop()
+                self._start()
+        self._refresh_endpoint()
+        if "Custom public HTTPS URL retained" in note:
+            self.tailscale_status.set(note)
+            return
+        self.tailscale_status.set(
+            "Tailscale MCP URL detected: " + self.endpoint.get()
+            + " | Verifying public Funnel, not yet connected..."
+        )
+        # After local engine startup, check the exact owned route and public
+        # health asynchronously; never mark an unverified URL as connected.
+        self.after(2800, lambda: self._request_tailscale_check(manual=False))
 
     def _copy_endpoint(self) -> None:
         text = self.endpoint.get()
@@ -1421,6 +1557,12 @@ class MyCompBot(tk.Tk):
             healthy = False
         try:
             while True:
+                configured, url, note = self.tailscale_discovery_queue.get_nowait()
+                self._accept_tailscale_discovery(configured, url, note)
+        except queue.Empty:
+            pass
+        try:
+            while True:
                 manual, ok, detail = self.tailscale_queue.get_nowait()
                 self.tailscale_busy = False
                 self.tailscale_status.set(("Public connection OK: " if ok else "Public connection FAILED: ") + detail)
@@ -1532,6 +1674,15 @@ class MyCompBot(tk.Tk):
                 return
 
             if should_repair:
+                # Never overwrite a different service already mounted on this
+                # host/path, including the user's ChatGPT or Studio gateway.
+                if not tailscale_endpoint.route_is_free_or_ours(
+                    funnel_status, TAILSCALE_HOST, TAILSCALE_PATH
+                ):
+                    raise RuntimeError(
+                        "Funnel path is owned by another service; "
+                        "MyComp Bot did not overwrite it."
+                    )
                 _repair_mycomp_funnel()
                 verify = subprocess.run(
                     [_tailscale_command(), "funnel", "status", "--json"],

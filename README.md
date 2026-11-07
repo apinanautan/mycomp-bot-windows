@@ -1,3 +1,26 @@
+## Version 1.1.31 — Automatic Tailscale MCP URL and quick-copy setup controls
+
+MyComp Bot now discovers the current Windows host's MagicDNS URL from the
+Tailscale CLI when the app opens, checks the existing Funnel mappings, and
+shows the actual MCP URL directly in the GUI. If root HTTPS belongs to a
+different application, MyComp uses its own /mycomp route when available.
+The app never overwrites a different service's existing Funnel route.
+A generated URL stays *unverified* until the public health check succeeds.
+New installs configure /mycomp automatically and copy the MCP endpoint.
+
+The main window now remembers a user-supplied plugin base name across launches
+and offers one-click copy for "<name> Tailscale", "<name> Tunnel", the
+saved Tunnel ID, and main Channel name. Channel ID is distinct from Tunnel ID
+and Channel name "main"; the Channel ID button reports that it is not
+available when the client has not provided one, instead of inventing an ID.
+These buttons work without opening the AI setup prompt.
+
+The full setup prompt remains available for AI-assisted Skills checks,
+remaining plugin tasks and system validation, and it starts with the stored
+name. API keys and OAuth secrets are never copied by these controls.
+Desktop shortcut repair and safe Save and connect behavior from v1.1.30
+are preserved.
+
 ## Version 1.1.30 — Desktop shortcut and Tunnel connect workflow
 
 MyComp Bot's Windows installer now creates an actual "MyComp Bot.lnk"
