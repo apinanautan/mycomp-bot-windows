@@ -1,3 +1,7 @@
+## Version 1.1.32 — Permission-checked Batch Execution
+
+Adds batch_execute for 1–12 sequential Shell or filesystem steps per MCP call. Each step independently checks the existing permission policy, executable restrictions and allowed filesystem roots. Per-step results and optional stop-on-error are supported. This reduces ChatGPT tool round trips without changing OAuth, Tunnel IDs or existing tools.
+
 ## Version 1.1.31 — Automatic Tailscale MCP URL and quick-copy setup controls
 
 MyComp Bot now discovers the current Windows host's MagicDNS URL from the

@@ -162,7 +162,7 @@ class HTTPIntegrationTests(unittest.TestCase):
             self.assertEqual(tools.status_code, 200, tools.text)
             names = {tool["name"] for tool in tools.json()["result"]["tools"]}
             self.assertEqual(names, set(TOOL_NAMES))
-            self.assertEqual(len(names), 12)
+            self.assertEqual(len(names), 13)
 
             resource_list = client.post(
                 "/mcp", headers=authenticated_headers,
@@ -247,7 +247,7 @@ class HTTPIntegrationTests(unittest.TestCase):
             self.assertEqual(tools.status_code, 200, tools.text)
             names = {tool["name"] for tool in tools.json()["result"]["tools"]}
             self.assertEqual(names, set(TOOL_NAMES))
-            self.assertEqual(len(names), 12)
+            self.assertEqual(len(names), 13)
 
             status_response = client.post(
                 "/mcp", headers=protocol_headers,
