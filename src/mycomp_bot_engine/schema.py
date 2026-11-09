@@ -11,6 +11,7 @@ TOOL_NAMES = (
     "vision",
     "filesystem",
     "batch_read",
+    "batch_execute",
     "diagnostics",
     "windows_automation",
 )

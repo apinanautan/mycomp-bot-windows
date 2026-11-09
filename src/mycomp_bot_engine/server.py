@@ -358,6 +358,121 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
         except Exception as error:
             return failed(error, request_id=request_id, started=started, backend="batch_read")
 
+    @mcp.tool(description="Execute 1 to 12 explicit Shell or filesystem steps in one MCP call. Each step independently checks the same permission policy, allowed paths and executable restrictions as the individual tools. Runs sequentially to preserve order and returns per-step results; no arbitrary nested tool calls.")
+    @threaded
+    def batch_execute(
+        steps: list[dict[str, Any]], stop_on_error: bool = False,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        started = time.monotonic()
+        try:
+            policy.require("normal", "batch_execute")
+            if not isinstance(steps, list) or not 1 <= len(steps) <= 12:
+                raise ValueError("steps must contain between 1 and 12 entries")
+            if not isinstance(stop_on_error, bool):
+                raise ValueError("stop_on_error must be a boolean")
+            results: list[dict[str, Any]] = []
+            changed = False
+            for index, step in enumerate(steps):
+                step_started = time.monotonic()
+                kind = step.get("kind") if isinstance(step, dict) else None
+                try:
+                    if kind == "shell":
+                        if step.get("operation", "run") != "run":
+                            raise ValueError("batch shell steps support operation=run only")
+                        executable = step.get("executable")
+                        arguments = step.get("arguments", [])
+                        if not isinstance(executable, str) or not executable:
+                            raise ValueError("executable must be a nonempty string")
+                        if not isinstance(arguments, list) or any(not isinstance(arg, str) for arg in arguments):
+                            raise ValueError("arguments must be a list of strings")
+                        privilege = step.get("privilege", "user")
+                        if privilege not in {"user", "admin"}:
+                            raise ValueError("privilege must be user or admin")
+                        if privilege == "admin" and Path(executable).name == "sudo":
+                            raise ValueError("do not pass sudo as executable when privilege=admin")
+                        argv = [executable, *arguments]
+                        if privilege == "admin":
+                            argv = ["/usr/bin/sudo", "-n", *argv]
+                        policy.require("full" if privilege == "admin" else required_command_level(argv), "batch_execute.shell")
+                        mode = step.get("execution", "auto")
+                        if mode not in {"foreground", "auto", "background"}:
+                            raise ValueError("invalid execution mode")
+                        cwd = step.get("cwd", ".")
+                        if not isinstance(cwd, str):
+                            raise ValueError("cwd must be a string")
+                        result = shell_engine.run(
+                            mode, argv, resolve_shell_cwd(cwd),
+                            timeout_seconds=step.get("timeout_seconds", 120),
+                            max_output_bytes=step.get("max_output_bytes"),
+                            tail_lines=step.get("tail_lines"),
+                            include_stdout=step.get("include_stdout", True),
+                            include_stderr=step.get("include_stderr", True),
+                            unrestricted=full_control(),
+                        )
+                        if result.get("state") == "finished" and result.get("exit_code") not in (None, 0):
+                            raise RuntimeError(f"shell exited with code {result['exit_code']}")
+                        results.append({
+                            "index": index, "kind": kind, "ok": True, "result": result,
+                            "duration_ms": int((time.monotonic() - step_started) * 1000),
+                        })
+                    elif kind == "filesystem":
+                        operation = step.get("operation")
+                        allowed = {"list", "read", "read_many", "stat", "stat_many", "search", "search_text", "write", "patch", "patch_many"}
+                        if operation not in allowed:
+                            raise ValueError("unsupported filesystem operation")
+                        write = operation in {"write", "patch", "patch_many"}
+                        policy.require("elevated" if write else "normal", "batch_execute.filesystem." + operation)
+                        path = step.get("path", ".")
+                        if not isinstance(path, str) or not path:
+                            raise ValueError("path must be a nonempty string")
+                        options: dict[str, Any] = {}
+                        if operation in {"read_many", "stat_many"}:
+                            options["paths"] = step.get("paths")
+                        if operation == "write":
+                            if not isinstance(step.get("content"), str):
+                                raise ValueError("content must be a string")
+                            options["content"] = step["content"]
+                        if operation == "patch":
+                            if not isinstance(step.get("old"), str) or not isinstance(step.get("new"), str):
+                                raise ValueError("old and new must be strings")
+                            options.update(old=step["old"], new=step["new"])
+                        if operation == "patch_many":
+                            options["changes"] = step.get("changes")
+                        if operation in {"search", "search_text"}:
+                            query = step.get("query")
+                            if not isinstance(query, str) or not query:
+                                raise ValueError("query must be a nonempty string")
+                            options.update(
+                                query=query, include=step.get("include"), exclude=step.get("exclude"),
+                                max_results=step.get("max_results", 100),
+                            )
+                        result = files.execute(operation, path, **options)
+                        changed = changed or write
+                        results.append({
+                            "index": index, "kind": kind, "operation": operation, "ok": True,
+                            "result": result,
+                            "duration_ms": int((time.monotonic() - step_started) * 1000),
+                        })
+                    else:
+                        raise ValueError("kind must be shell or filesystem")
+                except Exception as error:
+                    results.append({
+                        "index": index, "kind": kind, "ok": False,
+                        "error": {"type": type(error).__name__, "message": str(error)},
+                        "duration_ms": int((time.monotonic() - step_started) * 1000),
+                    })
+                    if stop_on_error:
+                        break
+            succeeded = sum(1 for item in results if item["ok"])
+            status = "completed" if succeeded == len(steps) else "partial" if succeeded else "failed"
+            return envelope(
+                request_id=request_id, status=status, changed=changed, results=results,
+                warnings=[f"{len(results) - succeeded} step(s) failed"] if succeeded != len(steps) else [],
+                started=started,
+            )
+        except Exception as error:
+            return failed(error, request_id=request_id, started=started, backend="batch_execute")
     @mcp.tool(description="Read-only MyComp Engine diagnostics. Returns tool readiness and configured limits, not secrets, tokens, file contents or credentials.")
     @threaded
     def diagnostics(request_id: str | None = None) -> dict[str, Any]:
