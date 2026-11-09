@@ -114,6 +114,19 @@ class Shell:
         )
 
     @staticmethod
+    def _windows_clean_exit(process: subprocess.Popen[bytes], readers: list[threading.Thread]) -> bool:
+        """Skip taskkill only after process exit and both pipes reach EOF.
+
+        Descendants that inherit pipes keep readers alive, retaining the original
+        process tree cleanup in that case and for running/timed out jobs.
+        """
+        if os.name != "nt" or process.poll() is None:
+            return False
+        for reader in readers:
+            reader.join(timeout=0.03)
+        return all(not reader.is_alive() for reader in readers)
+
+    @staticmethod
     def _group_exists(process: subprocess.Popen[bytes]) -> bool:
         if os.name == "nt":
             return process.poll() is None
@@ -299,7 +312,8 @@ class Shell:
                 try: code = process.wait(timeout=self.background_timeout)
                 except subprocess.TimeoutExpired:
                     timed_out = True; code = process.returncode
-                self._kill_group(process)
+                if not self._windows_clean_exit(process, readers):
+                    self._kill_group(process)
                 group_cleaned = True
                 if code is None: code = process.returncode
                 for thread in readers:
@@ -404,7 +418,8 @@ class Shell:
             timed_out = False
             try: process.wait(timeout=self._bounded_timeout(timeout_seconds, self.foreground_timeout, 300))
             except subprocess.TimeoutExpired: timed_out = True
-            self._kill_group(process)
+            if not self._windows_clean_exit(process, threads):
+                self._kill_group(process)
             group_cleaned = True
             for thread in threads:
                 thread.join(timeout=3)

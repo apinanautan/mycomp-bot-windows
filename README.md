@@ -1,3 +1,7 @@
+## Version 1.1.33 — Faster Windows Shell cleanup
+
+Avoids taskkill for successfully completed short Shell commands. Preserves cleanup for timeouts and pipe-holding descendants. Includes Batch Execution from v1.1.32.
+
 ## Version 1.1.32 — Permission-checked Batch Execution
 
 Adds batch_execute for 1–12 sequential Shell or filesystem steps per MCP call. Each step independently checks the existing permission policy, executable restrictions and allowed filesystem roots. Per-step results and optional stop-on-error are supported. This reduces ChatGPT tool round trips without changing OAuth, Tunnel IDs or existing tools.
