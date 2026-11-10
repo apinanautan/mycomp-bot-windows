@@ -22,5 +22,7 @@ oauth-state/
 *.pre-*
 test-results.txt
 wheel-downloads/
+# Benchmark timing artifacts (machine-specific, never versioned)
+scripts/benchmark-results.json
 # Local agent working notes
 STATE.md

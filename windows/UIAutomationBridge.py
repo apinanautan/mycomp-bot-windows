@@ -202,6 +202,64 @@ def _run_action(req: dict) -> dict:
             if len(windows) >= limit:
                 break
         return {"backend": "pywinauto-uia", "windows": windows, "count": len(windows)}
+    if action == "wait_until":
+        if not _has_selector(sel):
+            raise ValueError("wait_until requires a selector (handle, name, name_contains, automation_id or control_type)")
+        timeout = max(0.1, min(float(req.get("timeout_seconds", 15)), 120))
+        interval = max(0.05, min(float(req.get("interval", 0.2)), 2.0))
+        needle = str(req.get("text") or "")
+        start = time.monotonic()
+        deadline = start + timeout
+        last_refresh = start
+        handle = sel.get("handle")
+        while True:
+            found = None
+            if handle:
+                try:
+                    candidate = _window_by_handle(int(handle))
+                    candidate.handle
+                    found = candidate
+                except Exception:
+                    found = None
+            else:
+                # Top-level match is cheap and cached; only re-scan once per second
+                # so a genuinely new window is noticed.
+                if time.monotonic() - last_refresh > 1.0:
+                    _window_map(force=True)
+                    last_refresh = time.monotonic()
+                for window in _window_map():
+                    try:
+                        if _matches_name(window.window_text() or "", sel):
+                            found = window
+                            break
+                    except Exception:
+                        continue
+                # A text needle means "wait until a descendant containing this
+                # text appears"; walk only matched candidates, not the desktop.
+                if found is None and needle:
+                    for window in _window_map():
+                        try:
+                            for child in window.descendants():
+                                if needle.lower() in (child.window_text() or "").lower():
+                                    found = child
+                                    break
+                            if found is not None:
+                                break
+                        except Exception:
+                            continue
+            if found is not None:
+                try:
+                    data = elem(found)
+                    name = data.get("name") or ""
+                    if not needle or needle.lower() in name.lower():
+                        return {"backend": "pywinauto-uia", "matched": True, "element": data,
+                                "waited_ms": int((time.monotonic() - start) * 1000)}
+                except Exception:
+                    pass
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(interval)
+        raise TimeoutError(f"wait_until: selector did not match within {timeout:.1f}s")
     if action in ("observe", "observe_summary", "observe_changes", "inspect_elements"):
         if not _has_selector(sel):
             raise RuntimeError("A window selector is required for element inspection on Windows.")

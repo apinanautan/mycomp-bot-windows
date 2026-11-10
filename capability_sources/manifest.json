@@ -105,7 +105,8 @@
             "set_value",
             "close_window",
             "minimize_window",
-            "batch"
+            "batch",
+            "wait_until"
           ],
           "type": "string"
         }

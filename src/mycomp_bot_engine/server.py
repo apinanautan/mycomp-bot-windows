@@ -49,7 +49,7 @@ ApiMethod = Literal["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"]
 ShellOperation = Literal["run", "status", "wait", "logs", "result", "cancel", "resume", "approve", "deny"]
 ShellPrivilege = Literal["user", "admin"]
 DomAction = Literal["launch", "status", "list_tabs", "new_tab", "close_tab", "navigate", "evaluate", "query", "click", "type", "wait", "screenshot"]
-AccessibilityAction = Literal["status", "launch_app", "activate_app", "list_windows", "observe", "observe_summary", "observe_changes", "inspect_elements", "find_element", "click", "focus", "set_value", "menu_select", "close_window", "minimize_window", "set_window_frame"]
+AccessibilityAction = Literal["status", "launch_app", "activate_app", "list_windows", "observe", "observe_summary", "observe_changes", "inspect_elements", "find_element", "click", "focus", "set_value", "menu_select", "close_window", "minimize_window", "set_window_frame", "wait_until"]
 KeyboardAction = Literal["type_text", "paste_text", "press_key", "hotkey"]
 MouseAction = Literal["move", "click", "double_click", "right_click", "drag", "scroll"]
 VisionAction = Literal["capture_display", "capture_region", "capture_window", "ocr"]
@@ -799,7 +799,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
     ) -> dict[str, Any]:
         started = time.monotonic()
         try:
-            read_only = {"status", "list_windows", "observe", "observe_summary", "observe_changes", "inspect_elements", "find_element"}
+            read_only = {"status", "list_windows", "observe", "observe_summary", "observe_changes", "inspect_elements", "find_element", "wait_until"}
             sequence = steps or ([{"action": action, **(parameters or {})}] if action else [])
             if not sequence or len(sequence) > 40:
                 raise ValueError("provide action or between 1 and 40 accessibility steps")

@@ -1,3 +1,8 @@
+## Version 1.1.36 — wait_until and a before/after benchmark
+
+- `accessibility` gains a `wait_until` action: poll a selector (handle, name, name_contains, automation_id or control_type) until the window/element appears, optionally waiting for a descendant `text`, all inside ONE call. It reuses the warm window-map cache (existing matches resolve in ~1 ms) and re-scans the desktop once per second so genuinely new windows are noticed. A `TimeoutError` is raised on expiry so the caller knows nothing appeared. This collapses what used to be several `list_windows` round trips into one call.
+- `scripts/benchmark.py` measures the exact levers v1.1.35/1.1.36 change (shell spawn, browser_cdp import/warm/batch/screenshot bytes, UIA one-shot/cached/observe/batch) and appends to `scripts/benchmark-results.json` so a before/after pair can be diffed. Run it with the version's own Python (`<root>/.venv/Scripts/python.exe scripts/benchmark.py --root <root>`); `--with-browser` adds evaluate/screenshot numbers.
+
 ## Version 1.1.35 — Warm capability workers, one-call batches, compact screenshots
 
 Speed changes that keep the eight-tool surface and the deny-by-default policy:
