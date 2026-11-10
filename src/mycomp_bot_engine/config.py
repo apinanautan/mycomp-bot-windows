@@ -150,7 +150,7 @@ class Settings:
             max_search_depth=int(os.getenv("MYCOMP_MAX_SEARCH_DEPTH", "32")),
             shell_path=os.getenv("MYCOMP_SHELL_PATH", DEFAULT_SHELL_PATH),
             shell_foreground_timeout_seconds=float(os.getenv("MYCOMP_SHELL_FOREGROUND_TIMEOUT_SECONDS", "30")),
-            shell_auto_wait_seconds=float(os.getenv("MYCOMP_SHELL_AUTO_WAIT_SECONDS", "5")),
+            shell_auto_wait_seconds=float(os.getenv("MYCOMP_SHELL_AUTO_WAIT_SECONDS", "1.5")),
             schema_version=int(os.getenv("MYCOMP_SCHEMA_VERSION", "4")),
             public_base_url=os.getenv("MYCOMP_PUBLIC_BASE_URL", PUBLIC_BASE_URL),
         )

@@ -65,6 +65,7 @@ def execute(payload):
         "type_text", "paste_text", "press_key", "hotkey",
         "capture_display", "capture_region", "capture_window", "ocr",
         "launch_app", "activate_app", "inspect_elements", "find_element", "focus", "set_value", "menu_select", "set_window_frame", "close_window", "minimize_window",
+        "batch",
     }
     if action not in supported:
         raise ValueError(f"unsupported Windows UI action: {action}")

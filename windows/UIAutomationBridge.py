@@ -1,84 +1,312 @@
-import json, sys
+"""Windows UI Automation bridge (pywinauto / UIA backend).
+
+Two execution modes share one code path:
+
+* one-shot CLI - JSON request on stdin, single JSON response on stdout
+  (used by ``scripts/win`` macros and by the engine when the app is not running);
+* in-process module - the desktop app imports this file and keeps the module
+  resident, so the warm UIA desktop, the window map and the element cache survive
+  between MCP calls.
+
+Speed rule: a caller that already knows a ``handle`` must never trigger a
+virtual-desktop scan. Handle resolution is a direct ``window(handle=...)`` call,
+and window/element maps are cached for a short, bounded time.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+import threading
+import time
+
 from pywinauto import Desktop
 
-def elem(w):
-    r=w.rectangle()
-    info=w.element_info
-    return {"name":w.window_text(),"automation_id":getattr(info,"automation_id","") or "","control_type":getattr(info,"control_type","") or "","process_id":w.process_id(),"handle":int(w.handle or 0),"is_enabled":w.is_enabled(),"is_offscreen":not w.is_visible(),"bounds":{"x":r.left,"y":r.top,"width":r.width(),"height":r.height()},"value":None}
+_MAP_TTL = 20.0         # window map lifetime for selector scans
+_HANDLE_TTL = 300.0     # resolved handle lifetime
+_ELEMENT_TTL = 60.0     # resolved element lifetime
+_LOCK = threading.RLock()
+_DESKTOP = None
+_MAP: list = []
+_MAP_AT = 0.0
+_HANDLES: dict = {}
+_ELEMENTS: dict = {}
 
-def matches(w,s):
-    e=elem(w); n=e["name"] or ""
-    if s.get("handle") is not None and e["handle"]!=int(s["handle"]): return False
-    if s.get("process_id") is not None and e["process_id"]!=int(s["process_id"]): return False
-    if s.get("pid") is not None and e["process_id"]!=int(s["pid"]): return False
-    if s.get("name") and n!=str(s["name"]): return False
-    q=s.get("name_contains") or s.get("app_name")
-    if q and str(q).lower() not in n.lower(): return False
-    if s.get("automation_id") and e["automation_id"]!=str(s["automation_id"]): return False
-    if s.get("control_type") and e["control_type"]!=str(s["control_type"]).replace("ControlType.",""): return False
+
+def _desktop():
+    global _DESKTOP
+    if _DESKTOP is None:
+        _DESKTOP = Desktop(backend="uia")
+    return _DESKTOP
+
+
+def reset_cache() -> None:
+    global _MAP, _MAP_AT
+    with _LOCK:
+        _MAP, _MAP_AT = [], 0.0
+        _HANDLES.clear()
+        _ELEMENTS.clear()
+
+
+def elem(w, detail: bool = True) -> dict:
+    r = w.rectangle()
+    info = w.element_info
+    data = {
+        "name": w.window_text(),
+        "automation_id": getattr(info, "automation_id", "") or "",
+        "control_type": getattr(info, "control_type", "") or "",
+        "process_id": w.process_id(),
+        "handle": int(w.handle or 0),
+        "bounds": {"x": r.left, "y": r.top, "width": r.width(), "height": r.height()},
+        "value": None,
+    }
+    if detail:
+        # These two cross the UIA boundary per element and dominate scan cost.
+        try:
+            data["is_enabled"] = w.is_enabled()
+            data["is_offscreen"] = not w.is_visible()
+        except Exception:
+            data["is_enabled"], data["is_offscreen"] = True, False
+    return data
+
+
+def _selector(req) -> dict:
+    selector = req.get("selector") if isinstance(req, dict) else None
+    return selector if isinstance(selector, dict) else req
+
+
+def _has_selector(sel) -> bool:
+    return any(key in sel for key in
+               ("handle", "process_id", "pid", "name", "name_contains", "app_name", "automation_id", "control_type"))
+
+
+def _matches_name(name: str, sel: dict) -> bool:
+    if sel.get("name") and name != str(sel["name"]):
+        return False
+    query = sel.get("name_contains") or sel.get("app_name")
+    if query and str(query).lower() not in name.lower():
+        return False
     return True
 
-def find(s):
-    desk=Desktop(backend="uia")
-    if s.get("handle"):
-        return desk.window(handle=int(s["handle"]))
-    for w in desk.windows():
-        if matches(w,s): return w
-        try:
-            for c in w.descendants():
-                if matches(c,s): return c
-        except Exception: pass
-    raise RuntimeError("No Windows UI Automation element matched the selector.")
 
-def main(req):
-    action=req.get("action","status"); sel=req.get("selector") or req
-    desk=Desktop(backend="uia")
-    if action=="status": return {"backend":"pywinauto-uia","available":True}
-    if action=="list_windows":
-        lim=max(1,min(int(req.get("max_items",req.get("limit",200))),500)); ws=[]
-        for w in desk.windows():
+def _window_map(force: bool = False) -> list:
+    """Top-level windows, reused for a short window so scan cost is amortised."""
+    global _MAP, _MAP_AT
+    with _LOCK:
+        if not force and _MAP and time.monotonic() - _MAP_AT <= _MAP_TTL:
+            return list(_MAP)
+        windows = []
+        for window in _desktop().windows():
             try:
-                if matches(w,sel): ws.append(elem(w))
-            except Exception: pass
-            if len(ws)>=lim: break
-        return {"backend":"pywinauto-uia","windows":ws,"count":len(ws)}
-    if action in ("observe","observe_summary","observe_changes","inspect_elements"):
-        target=find(sel) if any(k in sel for k in ("handle","process_id","pid","name","name_contains","app_name","automation_id","control_type")) else None
-        if target is None: raise RuntimeError("A window selector is required for element inspection on Windows.")
-        lim=max(1,min(int(req.get("max_items",req.get("limit",100))),300)); max_depth=max(0,min(int(req.get("max_depth",4)),8)); out=[elem(target)]; queue=[(target,0)]; qi=0
-        while qi < len(queue) and len(out) < lim:
-            parent,depth=queue[qi]; qi+=1
-            if depth>=max_depth: continue
-            try: children=parent.children()
-            except Exception: continue
-            for c in children:
-                try: out.append(elem(c))
-                except Exception: continue
-                if len(out)>=lim: break
-                queue.append((c,depth+1))
-        return {"backend":"pywinauto-uia","root":out[0],"elements":out,"count":len(out)}
-    t=find(sel)
-    if action=="find_element": return {"backend":"pywinauto-uia","found":True,"element":elem(t)}
-    if action in ("focus","activate_app"): t.set_focus(); return {"backend":"pywinauto-uia","element":elem(t)}
-    if action in ("click","menu_select"): t.click_input(); return {"backend":"pywinauto-uia","invoked":True,"method":"click_input","element":elem(t)}
-    if action=="set_value": t.set_edit_text(str(req.get("value",""))); return {"backend":"pywinauto-uia","value_set":True,"element":elem(t)}
-    if action=="set_window_frame":
+                if window.handle:
+                    windows.append(window)
+            except Exception:
+                continue
+        _MAP, _MAP_AT = windows, time.monotonic()
+        return list(_MAP)
+
+
+def _window_by_handle(handle: int):
+    key = ("h", handle)
+    with _LOCK:
+        cached = _HANDLES.get(key)
+    if cached is not None and time.monotonic() - cached[1] <= _HANDLE_TTL:
+        window = cached[0]
+        try:
+            window.handle
+            return window
+        except Exception:
+            pass
+    window = _desktop().window(handle=handle)
+    with _LOCK:
+        _HANDLES[key] = (window, time.monotonic())
+    return window
+
+
+def _scan(sel: dict, include_descendants: bool):
+    for window in _window_map():
+        try:
+            if not _matches_name(window.window_text() or "", sel):
+                continue
+            info = window.element_info
+            if sel.get("automation_id") and (getattr(info, "automation_id", "") or "") != str(sel["automation_id"]):
+                continue
+            if sel.get("control_type") and (getattr(info, "control_type", "") or "") != str(sel["control_type"]).replace("ControlType.", ""):
+                continue
+            if sel.get("process_id") is not None or sel.get("pid") is not None:
+                wanted = sel.get("process_id", sel.get("pid"))
+                if int(window.process_id()) != int(wanted):
+                    continue
+            return window, True
+        except Exception:
+            continue
+    if not include_descendants:
+        return None, False
+    for window in _window_map():
+        try:
+            for child in window.descendants():
+                try:
+                    if not _matches_name(child.window_text() or "", sel):
+                        continue
+                    info = child.element_info
+                    if sel.get("automation_id") and (getattr(info, "automation_id", "") or "") != str(sel["automation_id"]):
+                        continue
+                    if sel.get("control_type") and (getattr(info, "control_type", "") or "") != str(sel["control_type"]).replace("ControlType.", ""):
+                        continue
+                    return child, False
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return None, False
+
+
+def find(sel: dict, include_descendants: bool = True):
+    """Resolve a selector. A known handle short-circuits every scan."""
+    handle = sel.get("handle")
+    if handle:
+        return _window_by_handle(int(handle)), True
+    key = json.dumps(sel, sort_keys=True, default=str)
+    with _LOCK:
+        cached = _ELEMENTS.get(key)
+    if cached is not None and time.monotonic() - cached[1] <= _ELEMENT_TTL:
+        try:
+            cached[0].handle
+            return cached[0], cached[2]
+        except Exception:
+            pass
+    found, is_window = _scan(sel, include_descendants)
+    if found is None:
+        raise RuntimeError("No Windows UI Automation element matched the selector.")
+    with _LOCK:
+        _ELEMENTS[key] = (found, time.monotonic(), is_window)
+    return found, is_window
+
+
+def _run_action(req: dict) -> dict:
+    action = req.get("action", "status")
+    sel = _selector(req)
+    if action == "status":
+        return {"backend": "pywinauto-uia", "available": True, "cached_windows": len(_MAP)}
+    if action == "list_windows":
+        limit = max(1, min(int(req.get("max_items", req.get("limit", 200))), 500))
+        detail = bool(req.get("detail", False))
+        windows = []
+        for window in _window_map(force=bool(req.get("refresh", False))):
+            try:
+                if _has_selector(sel) and not _matches_name(window.window_text() or "", sel):
+                    continue
+                windows.append(elem(window, detail=detail))
+            except Exception:
+                continue
+            if len(windows) >= limit:
+                break
+        return {"backend": "pywinauto-uia", "windows": windows, "count": len(windows)}
+    if action in ("observe", "observe_summary", "observe_changes", "inspect_elements"):
+        if not _has_selector(sel):
+            raise RuntimeError("A window selector is required for element inspection on Windows.")
+        target, _ = find(sel, include_descendants=False)
+        limit = max(1, min(int(req.get("max_items", req.get("limit", 100))), 300))
+        max_depth = max(0, min(int(req.get("max_depth", 4)), 8))
+        out = [elem(target)]
+        queue = [(target, 0)]
+        index = 0
+        while index < len(queue) and len(out) < limit:
+            parent, depth = queue[index]
+            index += 1
+            if depth >= max_depth:
+                continue
+            try:
+                children = parent.children()
+            except Exception:
+                continue
+            for child in children:
+                try:
+                    out.append(elem(child))
+                except Exception:
+                    continue
+                if len(out) >= limit:
+                    break
+                queue.append((child, depth + 1))
+        return {"backend": "pywinauto-uia", "root": out[0], "elements": out, "count": len(out)}
+    if action == "batch":
+        steps = req.get("steps") or []
+        if not isinstance(steps, list) or not 1 <= len(steps) <= 40:
+            raise ValueError("batch steps must contain between 1 and 40 entries")
+        results = []
+        for index, step in enumerate(steps):
+            started = time.monotonic()
+            try:
+                if not isinstance(step, dict):
+                    raise ValueError("each batch step must be an object")
+                value = _run_action({**req, **step})
+                results.append({"index": index, "ok": True, "result": value,
+                                "duration_ms": int((time.monotonic() - started) * 1000)})
+            except Exception as error:
+                results.append({"index": index, "ok": False,
+                                "error": {"type": type(error).__name__, "message": str(error)},
+                                "duration_ms": int((time.monotonic() - started) * 1000)})
+                if req.get("stop_on_error", True):
+                    break
+        return {"backend": "pywinauto-uia", "action": "batch", "results": results,
+                "count": len(results), "ok": all(item["ok"] for item in results)}
+    target, _ = find(sel)
+    if action == "find_element":
+        return {"backend": "pywinauto-uia", "found": True, "element": elem(target)}
+    if action in ("focus", "activate_app"):
+        target.set_focus()
+        return {"backend": "pywinauto-uia", "element": elem(target, detail=False)}
+    if action in ("click", "menu_select"):
+        target.click_input()
+        return {"backend": "pywinauto-uia", "invoked": True, "method": "click_input", "element": elem(target, detail=False)}
+    if action == "set_value":
+        target.set_edit_text(str(req.get("value", "")))
+        return {"backend": "pywinauto-uia", "value_set": True, "element": elem(target, detail=False)}
+    if action == "set_window_frame":
         # Explicitly selected window only; no coordinate-based fallback.
-        if not any(k in sel for k in ("handle", "process_id", "pid", "name", "name_contains", "app_name")):
+        if not _has_selector(sel):
             raise ValueError("set_window_frame requires an explicit window selector")
-        frame=req.get("frame") or req.get("bounds") or {}
-        if not isinstance(frame,dict) or not all(k in frame for k in ("x","y","width","height")):
+        frame = req.get("frame") or req.get("bounds") or {}
+        if not isinstance(frame, dict) or not all(key in frame for key in ("x", "y", "width", "height")):
             raise ValueError("set_window_frame requires frame with x, y, width, height")
-        x,y,width,height=(int(frame[k]) for k in ("x","y","width","height"))
+        x, y, width, height = (int(frame[key]) for key in ("x", "y", "width", "height"))
         if width < 100 or height < 100 or width > 16384 or height > 16384:
             raise ValueError("invalid window dimensions")
-        t.move_window(x,y,width,height,repaint=True)
-        return {"backend":"pywinauto-uia","action":action,"element":elem(t)}
-    if action=="close_window": t.close(); return {"backend":"pywinauto-uia","action":action}
-    if action=="minimize_window": t.minimize(); return {"backend":"pywinauto-uia","action":action}
+        target.move_window(x, y, width, height, repaint=True)
+        return {"backend": "pywinauto-uia", "action": action, "element": elem(target, detail=False)}
+    if action == "close_window":
+        target.close()
+        reset_cache()
+        return {"backend": "pywinauto-uia", "action": action}
+    if action == "minimize_window":
+        target.minimize()
+        return {"backend": "pywinauto-uia", "action": action}
     raise RuntimeError(f"Unsupported action: {action}")
 
-try:
-    req=json.loads(sys.stdin.read().lstrip("\ufeff")); print(json.dumps({"ok":True,"result":main(req),"error":""},ensure_ascii=False))
-except Exception as e:
-    print(json.dumps({"ok":False,"result":None,"error":str(e)},ensure_ascii=False)); sys.exit(1)
+
+def main(req: dict) -> dict:
+    """Run one request under the module lock; ``batch`` recurses in-process."""
+    with _LOCK:
+        return _run_action(req)
+
+
+def serve() -> None:
+    """Line protocol for a resident bridge process (optional)."""
+    for line in sys.stdin:
+        try:
+            request = json.loads(line.lstrip("\ufeff"))
+            print(json.dumps({"ok": True, "result": main(request), "error": ""}, ensure_ascii=False), flush=True)
+        except Exception as error:
+            print(json.dumps({"ok": False, "result": None, "error": str(error)}, ensure_ascii=False), flush=True)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] in {"serve", "--serve"}:
+        serve()
+    else:
+        try:
+            payload = json.loads(sys.stdin.read().lstrip("\ufeff"))
+            print(json.dumps({"ok": True, "result": main(payload), "error": ""}, ensure_ascii=False))
+        except Exception as error:
+            print(json.dumps({"ok": False, "result": None, "error": str(error)}, ensure_ascii=False))
+            sys.exit(1)

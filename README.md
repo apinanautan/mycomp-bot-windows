@@ -1,3 +1,15 @@
+## Version 1.1.35 — Warm capability workers, one-call batches, compact screenshots
+
+Speed changes that keep the eight-tool surface and the deny-by-default policy:
+
+- Capability workers: each maintained capability (browser_cdp, windows_ui) now runs in one warm, isolated subprocess that survives between calls instead of spawning a fresh interpreter per call. Import, OCR model load and the DevTools WebSocket handshake are paid once. Workers idle out after 15 minutes, cap at four, and a dead worker falls back to the old one-shot path automatically. Disable with `MYCOMP_CAPABILITY_WORKERS=0`.
+- Handle-first UI Automation: passing a `handle` skips the whole virtual-desktop scan; the window map and resolved elements are cached briefly. Measured on this machine: cached `list_windows` 16 ms vs 1.66 s cold, a 3-step `batch` costs one scan total instead of three.
+- One-call batches: `accessibility` and `dom_cdp` accept `steps` (up to 40 / 100 actions) executed inside one warm round trip, and `batch_execute` now accepts `accessibility`, `dom_cdp` and `vision` step kinds in addition to shell/filesystem. Each step still checks its own permission level.
+- Compact screenshots: `vision` captures default to JPEG quality 80 with optional `scale`, and `dom_cdp` screenshots follow the same defaults; OCR captures stay PNG internally. Smaller payloads leave more room in the model context. OCR accepts a `window` selector so it scans one window instead of the full display.
+- Shell auto-wait default dropped from 5 s to 1.5 s (`MYCOMP_SHELL_AUTO_WAIT_SECONDS` still overrides).
+- The Windows app runs the UIA bridge in-process (pywinauto) when available and keeps the PowerShell helper as fallback (`MYCOMP_UIA_BACKEND=powershell` to force it).
+- Ready-made macros in `scripts/win` (windows, click, read, wait_window, type, ocr, shot, cdp) let one Shell call do what used to take several tool round trips.
+
 ## Version 1.1.33 — Faster Windows Shell cleanup
 
 Avoids taskkill for successfully completed short Shell commands. Preserves cleanup for timeouts and pipe-holding descendants. Includes Batch Execution from v1.1.32.

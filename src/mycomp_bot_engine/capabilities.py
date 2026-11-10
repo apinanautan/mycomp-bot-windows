@@ -22,6 +22,28 @@ _RUN_TIMEOUT_SECONDS = 30.0
 _TERMINATE_GRACE_SECONDS = 1.0
 _OUTPUT_LIMIT_BYTES = 64_000
 _PIPE_CHUNK_BYTES = 8_192
+_WORKER_IDLE_SECONDS = 900.0
+_WORKER_MAX = 4
+_WORKER_RUNNER = """import json,sys
+s={}
+exec(compile(open(sys.argv[1],'rb').read(),sys.argv[1],'exec'),s)
+for line in sys.stdin:
+    try:
+        req=json.loads(line)
+    except Exception:
+        continue
+    try:
+        if req.get('action')=='test':
+            out={'id':req.get('id'),'ok':True,'result':s['self_test']()}
+        else:
+            out={'id':req.get('id'),'ok':True,'result':s['execute'](req.get('payload') or {})}
+    except BaseException as error:
+        out={'id':req.get('id'),'ok':False,'error':f'{type(error).__name__}: {error}'}
+    try:
+        sys.stdout.write(json.dumps(out, default=str)+'\\n'); sys.stdout.flush()
+    except BaseException:
+        break
+"""
 
 
 def _process_group_exists(process_group_id: int) -> bool:
@@ -39,12 +61,21 @@ def _process_group_exists(process_group_id: int) -> bool:
 def _stop_process_group(process: subprocess.Popen[bytes]) -> None:
     """Terminate every process in the isolated group and reap its leader."""
     if os.name == "nt":
-        process.terminate()
+        # Terminating only the parent leaves capability-created descendants running.
+        # Windows taskkill /T follows that parent process tree and /F ensures that
+        # children ignoring termination do not keep temporary files or pipes open.
+        subprocess.run(
+            ["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
+            capture_output=True,
+            timeout=10,
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
         try:
-            process.wait(timeout=_TERMINATE_GRACE_SECONDS)
+            process.wait(timeout=2)
         except subprocess.TimeoutExpired:
             process.kill()
-            process.wait()
+            process.wait(timeout=2)
         return
     try:
         os.killpg(process.pid, signal.SIGTERM)
@@ -85,6 +116,148 @@ def _read_bounded(stream: Any, output: bytearray, exceeded: threading.Event) -> 
                 break
     finally:
         stream.close()
+
+
+class _CapabilityWorker:
+    """One warm, isolated capability process speaking newline-delimited JSON.
+
+    Warmth is what makes repeated tool calls fast: process start, module import,
+    a cached DevTools socket or an OCR model are paid once per idle window
+    instead of once per call. A worker is disposable: any crash, timeout or
+    protocol error kills it and the next call spawns a fresh one.
+    """
+
+    def __init__(self, name: str, source: bytes, checksum: str) -> None:
+        self.name, self.checksum = name, checksum
+        self.lock = threading.Lock()
+        self.temp = tempfile.TemporaryDirectory(prefix="mycomp-capw-")
+        path = Path(self.temp.name) / f"{name}.py"
+        path.write_bytes(source)
+        os.chmod(path, 0o600)
+        self.process = subprocess.Popen(
+            [sys.executable, "-B", "-I", "-c", _WORKER_RUNNER, str(path)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cwd=self.temp.name, env=_capability_process_environment(),
+            start_new_session=os.name != "nt",
+            creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW) if os.name == "nt" else 0,
+        )
+        self.last_used = time.monotonic()
+        self._stderr: bytearray = bytearray()
+        self._stderr_exceeded = threading.Event()
+        self._seq = 0
+        threading.Thread(target=_read_bounded, args=(self.process.stderr, self._stderr, self._stderr_exceeded), daemon=True).start()
+
+    def alive(self) -> bool:
+        return self.process.poll() is None
+
+    def error_text(self) -> str:
+        return bytes(self._stderr).decode(errors="replace")[-1000:]
+
+    def call(self, action: str, payload: dict[str, Any] | None, timeout_seconds: float) -> Any:
+        assert self.process.stdin is not None and self.process.stdout is not None
+        self._seq += 1
+        request = json.dumps({"id": self._seq, "action": action, "payload": payload or {}}) + "\n"
+        try:
+            self.process.stdin.write(request.encode())
+            self.process.stdin.flush()
+        except (BrokenPipeError, OSError):
+            raise RuntimeError(self.error_text() or "capability worker closed its input")
+        deadline = time.monotonic() + timeout_seconds
+        box: dict[str, bytes] = {}
+
+        def read_one() -> None:
+            try:
+                box["line"] = self.process.stdout.readline()  # type: ignore[union-attr]
+            except (OSError, ValueError):
+                box["line"] = b""
+
+        reader = threading.Thread(target=read_one, daemon=True)
+        reader.start()
+        reader.join(timeout=max(0.05, deadline - time.monotonic()))
+        if reader.is_alive():
+            raise TimeoutError("capability timed out")
+        line = box.get("line") or b""
+        if not line:
+            raise RuntimeError(self.error_text() or "capability worker exited")
+        try:
+            response = json.loads(line)
+        except json.JSONDecodeError:
+            raise RuntimeError((self.error_text() or line.decode(errors="replace"))[-1000:])
+        if response.get("id") != self._seq:
+            raise RuntimeError("capability worker returned an out-of-order response")
+        if not response.get("ok"):
+            raise ValueError(str(response.get("error") or "capability failed")[-1000:])
+        self.last_used = time.monotonic()
+        return response.get("result")
+
+    def stop(self) -> None:
+        try:
+            if self.alive():
+                _stop_process_group(self.process)
+        finally:
+            for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
+                try:
+                    if stream: stream.close()
+                except OSError:
+                    pass
+            self.temp.cleanup()
+
+
+_WORKERS: dict[tuple[str, str], _CapabilityWorker] = {}
+_WORKERS_LOCK = threading.Lock()
+
+
+def _worker_enabled() -> bool:
+    return os.getenv("MYCOMP_CAPABILITY_WORKERS", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _worker_slot(name: str, source: bytes, checksum: str) -> _CapabilityWorker:
+    key = (name, checksum)
+    with _WORKERS_LOCK:
+        worker = _WORKERS.get(key)
+        if worker is not None and worker.alive() and time.monotonic() - worker.last_used <= _WORKER_IDLE_SECONDS:
+            return worker
+        if worker is not None:
+            _WORKERS.pop(key, None)
+            worker.stop()
+        if len(_WORKERS) >= _WORKER_MAX:
+            oldest_key = min(_WORKERS, key=lambda item: _WORKERS[item].last_used)
+            _WORKERS.pop(oldest_key).stop()
+        worker = _CapabilityWorker(name, source, checksum)
+        _WORKERS[key] = worker
+        return worker
+
+
+def _discard_worker(name: str, source: bytes) -> None:
+    key = (name, hashlib.sha256(source).hexdigest())
+    with _WORKERS_LOCK:
+        worker = _WORKERS.pop(key, None)
+    if worker is not None:
+        try:
+            worker.stop()
+        except Exception:
+            pass
+
+
+def close_workers() -> None:
+    with _WORKERS_LOCK:
+        for worker in _WORKERS.values():
+            try:
+                worker.stop()
+            except Exception:
+                pass
+        _WORKERS.clear()
+
+
+def worker_snapshot() -> dict[str, Any]:
+    with _WORKERS_LOCK:
+        return {
+            "enabled": _worker_enabled(),
+            "max": _WORKER_MAX,
+            "idle_seconds": _WORKER_IDLE_SECONDS,
+            "warm": [{"capability": name, "idle_seconds": round(time.monotonic() - worker.last_used, 1)}
+                     for (name, _), worker in _WORKERS.items() if worker.alive()],
+        }
 
 
 def _capability_process_environment() -> dict[str, str]:
@@ -491,7 +664,27 @@ class CapabilityRegistry:
             timeout = min(max(float(execution.get("wait_seconds", 5)), 0), 60)
             return self.control("wait", launched["job_id"], timeout_seconds=timeout)
         timeout = float(payload.pop("__timeout_seconds", descriptor.get("default_timeout_seconds", _RUN_TIMEOUT_SECONDS)))
+        if _worker_enabled():
+            try:
+                return self._run_worker(name, source, payload, timeout_seconds=timeout)
+            except (RuntimeError, TimeoutError, OSError) as error:
+                # A dead or wedged worker must not fail the call: fall back once to
+                # the cold one-shot path, which is always available.
+                _discard_worker(name, source)
+                if isinstance(error, (TimeoutError, OSError)):
+                    raise
         return self._run(source, name, "execute", payload, timeout_seconds=timeout)
+
+    @staticmethod
+    def _run_worker(name: str, source: bytes, payload: dict[str, Any], *, timeout_seconds: float) -> Any:
+        checksum = hashlib.sha256(source).hexdigest()
+        worker = _worker_slot(name, source, checksum)
+        if not worker.lock.acquire(timeout=max(0.1, timeout_seconds)):
+            raise TimeoutError("capability worker busy")
+        try:
+            return worker.call("execute", payload, timeout_seconds)
+        finally:
+            worker.lock.release()
 
     def has_job(self, job_id: str) -> bool:
         stored = self.database.job(job_id)

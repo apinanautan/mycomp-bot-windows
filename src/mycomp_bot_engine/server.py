@@ -29,7 +29,7 @@ from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl, Field
 
-from .capabilities import CapabilityRegistry
+from .capabilities import CapabilityRegistry, close_workers, worker_snapshot
 from .config import CLIENT_ID, Settings
 from .database import Database
 from .filesystem import Filesystem
@@ -76,6 +76,7 @@ class EngineResources:
         self._closed = True
         self.shell.shutdown()
         self.runtime.shutdown()
+        close_workers()
         self.database.close()
 
 
@@ -358,7 +359,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
         except Exception as error:
             return failed(error, request_id=request_id, started=started, backend="batch_read")
 
-    @mcp.tool(description="Execute 1 to 12 explicit Shell or filesystem steps in one MCP call. Each step independently checks the same permission policy, allowed paths and executable restrictions as the individual tools. Runs sequentially to preserve order and returns per-step results; no arbitrary nested tool calls.")
+    @mcp.tool(description="Execute 1 to 12 explicit Shell, filesystem, accessibility, dom_cdp or vision steps in one MCP call. Each step independently checks the same permission policy, allowed paths and executable restrictions as the individual tools. Runs sequentially to preserve order and returns per-step results; no arbitrary nested tool calls. Prefer this over several separate calls: every avoided round trip is dead time.")
     @threaded
     def batch_execute(
         steps: list[dict[str, Any]], stop_on_error: bool = False,
@@ -454,8 +455,51 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
                             "result": result,
                             "duration_ms": int((time.monotonic() - step_started) * 1000),
                         })
+                    elif kind == "accessibility":
+                        step_action = str(step.get("action", ""))
+                        if step_action not in AccessibilityAction.__args__:
+                            raise ValueError("unsupported accessibility action")
+                        read_only = {"status", "list_windows", "observe", "observe_summary", "observe_changes", "inspect_elements", "find_element"}
+                        policy.require("normal" if step_action in read_only else "elevated", "batch_execute.accessibility." + step_action)
+                        payload = {key: value for key, value in step.items() if key not in {"kind", "action", "execution", "privilege"}}
+                        payload.setdefault("allow_ocr_fallback", False)
+                        payload["timeout_seconds"] = float(step.get("timeout_seconds", 30))
+                        value = ui_result(step_action, payload, backend="accessibility")
+                        results.append({
+                            "index": index, "kind": kind, "action": step_action, "ok": True,
+                            "result": value,
+                            "duration_ms": int((time.monotonic() - step_started) * 1000),
+                        })
+                    elif kind == "dom_cdp":
+                        step_action = str(step.get("action", ""))
+                        if step_action not in DomAction.__args__:
+                            raise ValueError("unsupported DOM/CDP action")
+                        read_only = {"status", "list_tabs", "query", "wait", "screenshot"}
+                        policy.require("normal" if step_action in read_only else "elevated", "batch_execute.dom_cdp." + step_action)
+                        payload = {key: value for key, value in step.items() if key not in {"kind", "action", "execution", "privilege"}}
+                        payload["timeout_seconds"] = float(step.get("timeout_seconds", 60))
+                        value = internal_capability("browser_cdp", {**payload, "action": step_action})
+                        results.append({
+                            "index": index, "kind": kind, "action": step_action, "ok": True,
+                            "result": value,
+                            "duration_ms": int((time.monotonic() - step_started) * 1000),
+                        })
+                    elif kind == "vision":
+                        step_action = str(step.get("action", ""))
+                        if step_action not in VisionAction.__args__:
+                            raise ValueError("unsupported vision action")
+                        policy.require("normal", "batch_execute.vision." + step_action)
+                        payload = {key: value for key, value in step.items() if key not in {"kind", "action", "execution", "privilege"}}
+                        payload["timeout_seconds"] = float(step.get("timeout_seconds", 30))
+                        payload.setdefault("format", "jpeg")
+                        value = ui_result(step_action, payload, backend="vision")
+                        results.append({
+                            "index": index, "kind": kind, "action": step_action, "ok": True,
+                            "result": value,
+                            "duration_ms": int((time.monotonic() - step_started) * 1000),
+                        })
                     else:
-                        raise ValueError("kind must be shell or filesystem")
+                        raise ValueError("kind must be shell, filesystem, accessibility, dom_cdp or vision")
                 except Exception as error:
                     results.append({
                         "index": index, "kind": kind, "ok": False,
@@ -488,6 +532,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
                 "filesystem_read_limit_bytes": settings.max_read_bytes,
                 "shell_enabled": settings.allow_shell,
                 "queue": "single-flight-per-user-and-tool",
+                "capability_workers": worker_snapshot(),
                 "uptime_probe": "responsive",
             }], started=started)
         except Exception as error:
@@ -636,7 +681,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
         except Exception as error:
             return failed(error, request_id=request_id, started=started, backend="shell")
 
-    @mcp.tool(description="Execute explicit Chrome DOM/CDP actions in the dedicated browser. Launch may target a configured display. No GUI, Accessibility, Mouse, or OCR fallback is performed.")
+    @mcp.tool(description="Execute explicit Chrome DOM/CDP actions in the dedicated browser. Pass steps to run up to 100 actions in ONE call on a warm DevTools socket; evaluate runs arbitrary JavaScript in the page (read, click, fetch, scrape, wait) and is far faster than UI automation. Screenshots default to JPEG with quality/scale. No GUI, Accessibility, Mouse, or OCR fallback.")
     @threaded
     def dom_cdp(
         action: DomAction | None = None, parameters: dict[str, Any] | None = None,
@@ -655,7 +700,8 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
             if dry_run:
                 return envelope(request_id=request_id, results=[{"dry_run": True, "steps": sequence}], started=started)
             results: list[Any] = []
-            for raw in sequence:
+            if len(sequence) == 1:
+                raw = sequence[0]
                 if not isinstance(raw, dict) or raw.get("action") not in DomAction.__args__:
                     raise ValueError("each DOM/CDP step requires a supported action")
                 payload = {**raw, "timeout_seconds": min(float(raw.get("timeout_seconds", timeout_seconds)), timeout_seconds)}
@@ -665,7 +711,25 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
                     payload["display_id"] = display_id
                 value = internal_capability("browser_cdp", payload)
                 results.append({"action": payload["action"], "result": value})
-            changed = any(item["action"] not in {"status", "list_tabs", "query", "screenshot"} for item in results)
+            else:
+                # One capability round trip: the browser keeps a warm DevTools
+                # socket and runs the whole sequence in a single call.
+                batch: list[dict[str, Any]] = []
+                for raw in sequence:
+                    if not isinstance(raw, dict) or raw.get("action") not in DomAction.__args__:
+                        raise ValueError("each DOM/CDP step requires a supported action")
+                    step = {**raw, "timeout_seconds": min(float(raw.get("timeout_seconds", timeout_seconds)), timeout_seconds)}
+                    if tab_id and "tab_id" not in step:
+                        step["tab_id"] = tab_id
+                    if display_id and "display_id" not in step:
+                        step["display_id"] = display_id
+                    batch.append(step)
+                payload = {"action": "batch", "steps": batch, "timeout_seconds": timeout_seconds,
+                           "stop_on_error": True}
+                value = internal_capability("browser_cdp", payload)
+                results.append({"action": "batch", "result": value})
+                results = list(value.get("results") or results)
+            changed = any(item.get("action") not in {"status", "list_tabs", "query", "screenshot"} for item in results)
             return envelope(request_id=request_id, changed=changed, results=results, started=started)
         except Exception as error:
             return failed(error, request_id=request_id, started=started, backend="dom_cdp")
@@ -725,28 +789,46 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
             return envelope(request_id=request_id, changed=True, results=[{"result": result}], task_id=result.get("job_id"), started=started)
         except Exception as error:
             return failed(error, request_id=request_id, started=started, backend="windows_automation")
-    @mcp.tool(description="Read or act on native Accessibility elements via the selected Windows UI Automation or macOS backend. No coordinate or OCR fallback.")
+    @mcp.tool(description="Read or act on native Accessibility elements via the selected Windows UI Automation or macOS backend. Pass steps to run up to 40 actions in ONE call; reuse a returned handle instead of a name selector because handles skip the window scan entirely. No coordinate or OCR fallback.")
     @threaded
     def accessibility(
-        action: AccessibilityAction, parameters: dict[str, Any] | None = None, display_id: str | None = None,
+        action: AccessibilityAction | None = None, parameters: dict[str, Any] | None = None, display_id: str | None = None,
         timeout_seconds: float = 30, approval: Literal["use_policy", "always_ask", "skip"] = "use_policy",
         dry_run: bool = False, request_id: str | None = None, metadata: dict[str, Any] | None = None,
+        steps: list[dict[str, Any]] | None = None, stop_on_error: bool = True,
     ) -> dict[str, Any]:
         started = time.monotonic()
         try:
-            policy.require("normal" if action in {"status", "list_windows", "observe", "observe_summary", "observe_changes", "inspect_elements", "find_element"} else "elevated", "accessibility")
-            payload = {**(parameters or {}), "timeout_seconds": timeout_seconds, "allow_ocr_fallback": False, "allow_coordinate_fallback": False}
-            if display_id and "display_id" not in payload:
-                payload["display_id"] = display_id
-            if "x" in payload or "y" in payload:
-                raise ValueError("coordinate input belongs in the mouse tool")
+            read_only = {"status", "list_windows", "observe", "observe_summary", "observe_changes", "inspect_elements", "find_element"}
+            sequence = steps or ([{"action": action, **(parameters or {})}] if action else [])
+            if not sequence or len(sequence) > 40:
+                raise ValueError("provide action or between 1 and 40 accessibility steps")
+            requested = [str(item.get("action")) for item in sequence if isinstance(item, dict)]
+            policy.require("normal" if all(item in read_only for item in requested) else "elevated", "accessibility")
+            if not steps:
+                payload = {**(parameters or {}), "timeout_seconds": timeout_seconds, "allow_ocr_fallback": False, "allow_coordinate_fallback": False}
+                if display_id and "display_id" not in payload:
+                    payload["display_id"] = display_id
+                if "x" in payload or "y" in payload:
+                    raise ValueError("coordinate input belongs in the mouse tool")
+                if dry_run:
+                    return envelope(request_id=request_id, results=[{"dry_run": True, "action": action, "parameters": payload}], started=started)
+                value = ui_result(str(action), payload, backend="accessibility")
+                if action in read_only:
+                    result, uris = store_observation(value, mode=str(action))
+                    return envelope(request_id=request_id, results=[result], resource_uris=uris, started=started)
+                return envelope(request_id=request_id, changed=True, results=[{"action": action, "result": value}], started=started)
             if dry_run:
-                return envelope(request_id=request_id, results=[{"dry_run": True, "action": action, "parameters": payload}], started=started)
-            value = ui_result(action, payload, backend="accessibility")
-            if action in {"status", "list_windows", "observe", "observe_summary", "observe_changes", "inspect_elements", "find_element"}:
-                result, uris = store_observation(value, mode=action)
-                return envelope(request_id=request_id, results=[result], resource_uris=uris, started=started)
-            return envelope(request_id=request_id, changed=True, results=[{"action": action, "result": value}], started=started)
+                return envelope(request_id=request_id, results=[{"dry_run": True, "steps": sequence}], started=started)
+            # One capability round trip for the whole sequence: the warm bridge
+            # resolves handles and caches the window map across the steps.
+            payload = {"timeout_seconds": max(timeout_seconds, 5.0 * len(sequence)), "steps": sequence,
+                       "stop_on_error": bool(stop_on_error), "allow_ocr_fallback": False, "allow_coordinate_fallback": False}
+            if display_id:
+                payload["display_id"] = display_id
+            value = ui_result("batch", payload, backend="accessibility")
+            changed = any(item not in read_only for item in requested)
+            return envelope(request_id=request_id, changed=changed, results=[value], started=started)
         except Exception as error:
             return failed(error, request_id=request_id, started=started, backend="accessibility")
 
@@ -816,17 +898,24 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
         except Exception as error:
             return failed(error, request_id=request_id, started=started, backend="mouse")
 
-    @mcp.tool(description="Capture a selected display/window/region or run local OCR and return display-local coordinates/confidence. It never moves or clicks the mouse.")
+    @mcp.tool(description="Capture a selected display/window/region or run local OCR and return display-local coordinates/confidence. Screenshots are JPEG by default with quality/scale; prefer a window or region over the whole display, and pass window to OCR to scan only one window. It never moves or clicks the mouse.")
     @threaded
     def vision(
         action: VisionAction, region: dict[str, float] | None = None, app: dict[str, Any] | None = None,
         window_index: int = 0, text: str | None = None, exact: bool = False, min_confidence: float = 0,
         display_id: str | None = None, timeout_seconds: float = 30, request_id: str | None = None, metadata: dict[str, Any] | None = None,
+        format: Literal["jpeg", "png"] = "jpeg", quality: int = 80, scale: float = 1.0,
+        window: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         started = time.monotonic()
         try:
             policy.require("normal", "vision")
             payload: dict[str, Any] = {"timeout_seconds": timeout_seconds}
+            if action in {"capture_display", "capture_region", "capture_window"}:
+                # JPEG plus an optional downscale keeps returned screenshots small.
+                payload.update(format=format, quality=max(10, min(int(quality), 95)), scale=max(0.1, min(float(scale), 2.0)))
+            if window:
+                payload["window"] = window
             if display_id:
                 payload["display_id"] = display_id
             if region:

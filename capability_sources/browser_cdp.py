@@ -19,6 +19,8 @@ _APP_DATA = Path(os.getenv("MYCOMP_DATA_DIR", Path.home() / "AppData/Local/MyCom
 _CONFIG = _APP_DATA / ".env"
 _DEFAULT_PROFILE = _APP_DATA / "browser-profile"
 _DISPLAY_STATE = _APP_DATA / "runtime/display-state.json"
+_WARM = True
+_SOCKETS: dict[str, "CDPWebSocket"] = {}
 
 
 def _settings() -> dict[str, str]:
@@ -252,13 +254,54 @@ class CDPWebSocket:
 
 
 def _with_tab(payload: dict[str, Any], callback):
+    """Run a callback against a tab, reusing a pooled DevTools socket.
+
+    Keeping the socket warm (worker mode) removes the WebSocket handshake from
+    every call; a stale socket is detected on error and replaced once.
+    """
     port = _port(payload)
     tab = _tab(port, payload)
-    socket_client = CDPWebSocket(tab["webSocketDebuggerUrl"], timeout=float(payload.get("timeout_seconds", 10)))
+    url = tab["webSocketDebuggerUrl"]
+    pooled = _SOCKETS.get(url) if _WARM else None
+    for attempt in (0, 1):
+        client = pooled if attempt == 0 and pooled is not None else None
+        try:
+            if client is None or client.sock is None:
+                client = CDPWebSocket(url, timeout=float(payload.get("timeout_seconds", 10)))
+                if _WARM:
+                    _SOCKETS[url] = client
+            elif not _socket_alive(client):
+                client.close()
+                client = CDPWebSocket(url, timeout=float(payload.get("timeout_seconds", 10)))
+                if _WARM:
+                    _SOCKETS[url] = client
+            return callback(client, tab)
+        except (ConnectionError, OSError):
+            if client is not None:
+                client.close()
+                if _SOCKETS.get(url) is client:
+                    _SOCKETS.pop(url, None)
+            if attempt == 1:
+                raise
+            pooled = None
+    raise RuntimeError("CDP connection failed")
+
+
+def _socket_alive(client: "CDPWebSocket") -> bool:
     try:
-        return callback(socket_client, tab)
-    finally:
-        socket_client.close()
+        client.sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+        return True
+    except (OSError, AttributeError):
+        return False
+
+
+def _drop_sockets() -> None:
+    for client in list(_SOCKETS.values()):
+        try:
+            client.close()
+        except OSError:
+            pass
+    _SOCKETS.clear()
 
 
 def _evaluate(client: CDPWebSocket, expression: str, await_promise: bool = True) -> Any:
@@ -413,14 +456,54 @@ def execute(payload):
         return {"matched": False, "timed_out": True, "timeout_seconds": timeout}
 
     if action == "screenshot":
-        destination = Path(str(payload.get("path", Path.home() / "Downloads/browser-screenshot.png"))).expanduser()
+        # Default JPEG keeps the file (and any base64 the caller asks for) small.
+        image_format = "jpeg" if str(payload.get("format", "jpeg")).lower() in {"jpg", "jpeg"} else "png"
+        quality = max(10, min(int(payload.get("quality", 80) or 80), 95))
+        scale = max(0.1, min(float(payload.get("scale", 1.0) or 1.0), 2.0))
+        suffix = "jpg" if image_format == "jpeg" else "png"
+        destination = Path(str(payload.get("path", Path.home() / f"Downloads/browser-screenshot.{suffix}"))).expanduser()
         destination.parent.mkdir(parents=True, exist_ok=True)
         def capture(client, tab):
             client.call("Page.enable")
-            result = client.call("Page.captureScreenshot", {"format": str(payload.get("format", "png")), "fromSurface": True, "captureBeyondViewport": bool(payload.get("full_page", False))})
+            params: dict[str, Any] = {"format": image_format, "fromSurface": True,
+                                      "captureBeyondViewport": bool(payload.get("full_page", False))}
+            if image_format == "jpeg":
+                params["quality"] = quality
+            if scale != 1.0:
+                metrics = client.call("Page.getLayoutMetrics")
+                viewport = metrics.get("cssVisualViewport") or metrics.get("layoutViewport") or {}
+                width = int(viewport.get("clientWidth", 1280))
+                height = int(viewport.get("clientHeight", 800))
+                params["clip"] = {"x": 0, "y": 0, "width": width, "height": height, "scale": scale}
+            result = client.call("Page.captureScreenshot", params)
             destination.write_bytes(base64.b64decode(result["data"], validate=True))
-            return {"path": str(destination), "bytes": destination.stat().st_size, "tab_id": tab["id"]}
+            return {"path": str(destination), "bytes": destination.stat().st_size, "format": image_format,
+                    "scale": scale, "tab_id": tab["id"]}
         return _with_tab(payload, capture)
+
+    if action == "batch":
+        steps = payload.get("steps")
+        if not isinstance(steps, list) or not 1 <= len(steps) <= 100:
+            raise ValueError("batch steps must contain between 1 and 100 entries")
+        results: list[dict[str, Any]] = []
+        for index, step in enumerate(steps):
+            started = time.monotonic()
+            try:
+                if not isinstance(step, dict) or not step.get("action"):
+                    raise ValueError("each batch step must be an object with an action")
+                sub = {**payload, **step}
+                sub.pop("steps", None)
+                value = execute(sub)
+                results.append({"index": index, "action": step["action"], "ok": True, "result": value,
+                                "duration_ms": int((time.monotonic() - started) * 1000)})
+            except Exception as error:
+                results.append({"index": index, "action": (step or {}).get("action") if isinstance(step, dict) else None,
+                                "ok": False, "error": {"type": type(error).__name__, "message": str(error)},
+                                "duration_ms": int((time.monotonic() - started) * 1000)})
+                if payload.get("stop_on_error", True):
+                    break
+        return {"action": "batch", "results": results, "count": len(results),
+                "ok": all(item["ok"] for item in results)}
 
     raise ValueError(f"unsupported browser CDP action: {action}")
 

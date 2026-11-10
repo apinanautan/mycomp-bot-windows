@@ -23,7 +23,7 @@ class WindowsHostTests(unittest.TestCase):
         instance.automation.execute.return_value = {"windows": [{"handle": 123, "bounds": {"x": 12, "y": 34, "width": 640, "height": 480}}]}
         instance.capture.capture.return_value = {"path": "capture.png", "bounds": {"x": 12, "y": 34, "width": 640, "height": 480}}
         result = instance._execute_ui({"action": "capture_window", "handle": 123})
-        instance.capture.capture.assert_called_once_with({"x": 12, "y": 34, "width": 640, "height": 480})
+        instance.capture.capture.assert_called_once_with({"x": 12, "y": 34, "width": 640, "height": 480}, format="jpeg", quality=80, scale=1.0)
         self.assertEqual(result["window"]["handle"], 123)
         with self.assertRaises(ValueError):
             instance._execute_ui({"action": "capture_window"})

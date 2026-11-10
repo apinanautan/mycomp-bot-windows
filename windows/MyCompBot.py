@@ -12,6 +12,7 @@ if hasattr(ctypes, "windll"):
         except (AttributeError, OSError):
             pass
 import ipaddress
+import io
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -66,6 +67,7 @@ TAILSCALE_AUTOFIX_INTERVAL = 60
 TAILSCALE_REBIND_COOLDOWN = 300
 REMOTE_COMMANDER_PACKAGE = "@wonderwhy-er/desktop-commander"
 UI_AUTOMATION_HELPER = Path(__file__).resolve().with_name("UIAutomationBridge.ps1")
+UI_AUTOMATION_HELPER_PY = Path(__file__).resolve().with_name("UIAutomationBridge.py")
 AUTOSTART_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 AUTOSTART_NAME = "MyComp Bot"
 ISSUE_URL = "https://github.com/apinanautan/mycomp-bot-windows/issues/new?title=MyComp%20Bot%20error"
@@ -532,7 +534,8 @@ class WindowsCapture:
             return struct.pack(">I", len(value)) + name + value + struct.pack(">I", zlib.crc32(name + value) & 0xFFFFFFFF)
         return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(rows, level=6)) + chunk(b"IEND", b"")
 
-    def capture(self, region: dict[str, object] | None = None) -> dict[str, object]:
+    def capture(self, region: dict[str, object] | None = None, format: str = "png",
+                quality: int = 80, scale: float = 1.0) -> dict[str, object]:
         bounds = self.desktop_bounds()
         requested = region or bounds
         x, y = round(float(requested.get("x", bounds["x"]))), round(float(requested.get("y", bounds["y"])))
@@ -560,15 +563,52 @@ class WindowsCapture:
             self.gdi32.DeleteDC(memory)
             self.user32.ReleaseDC(0, screen)
         self.directory.mkdir(parents=True, exist_ok=True)
-        path = self.directory / f"capture-{uuid.uuid4().hex}.png"
-        path.write_bytes(self._png(width, height, pixels.raw))
-        return {"path": str(path), "width": width, "height": height, "bounds": {"x": x, "y": y, "width": width, "height": height}, "backend": "win32-bitblt"}
+        suffix = "jpg" if str(format).lower() in {"jpg", "jpeg"} else "png"
+        path = self.directory / f"capture-{uuid.uuid4().hex}.{suffix}"
+        payload = self._png(width, height, pixels.raw)
+        clamped = max(0.1, min(float(scale or 1.0), 2.0))
+        if suffix == "jpg" or clamped != 1.0:
+            # JPEG plus an optional downscale keeps the encoded screenshot small
+            # enough that returning it never floods the caller's context.
+            with Image.open(io.BytesIO(payload)) as image:
+                picture = image.convert("RGB")
+                if clamped != 1.0:
+                    picture = picture.resize((max(1, round(width * clamped)), max(1, round(height * clamped))), Image.Resampling.LANCZOS)
+                buffer = io.BytesIO()
+                picture.save(buffer, "JPEG", quality=max(10, min(int(quality or 80), 95)), optimize=True)
+                payload = buffer.getvalue()
+        path.write_bytes(payload)
+        return {"path": str(path), "width": width, "height": height, "bytes": len(payload),
+                "format": suffix, "scale": clamped,
+                "bounds": {"x": x, "y": y, "width": width, "height": height}, "backend": "win32-bitblt"}
 
 
 class WindowsUIAutomation:
-    """Runs a fixed local UIA helper; MCP-supplied text is JSON data, never code."""
+    """Runs UI Automation through the warm in-process bridge.
 
-    def execute(self, payload: dict[str, object]) -> dict[str, object]:
+    The bridge module is imported once and kept resident so the UIA desktop, the
+    window map and the element cache survive between MCP calls; the PowerShell
+    helper remains the fallback when pywinauto is unavailable.
+    """
+
+    def __init__(self) -> None:
+        self.module = None
+        self.last_error = ""
+
+    def _load(self):
+        if self.module is not None:
+            return self.module
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("mycomp_uia_bridge", UI_AUTOMATION_HELPER_PY)
+        if spec is None or spec.loader is None:
+            raise RuntimeError("Windows UI Automation bridge is missing")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.module = module
+        return module
+
+    def _powershell(self, payload: dict[str, object]) -> dict[str, object]:
         if not UI_AUTOMATION_HELPER.is_file():
             raise RuntimeError("Windows UI Automation helper is missing")
         timeout = min(max(float(payload.get("timeout_seconds", 30)), 0.1), 120)
@@ -587,6 +627,19 @@ class WindowsUIAutomation:
         if not isinstance(result, dict):
             raise RuntimeError("Windows UI Automation returned an invalid result")
         return result
+
+    def execute(self, payload: dict[str, object]) -> dict[str, object]:
+        backend = os.environ.get("MYCOMP_UIA_BACKEND", "auto").strip().lower()
+        if backend != "powershell":
+            try:
+                module = self._load()
+            except ImportError as error:
+                if backend == "python":
+                    raise RuntimeError(f"pywinauto is unavailable: {error}") from error
+                self.last_error = str(error)
+            else:
+                return module.main(dict(payload))
+        return self._powershell(payload)
 
 
 class MyCompBot(tk.Tk):
@@ -1781,8 +1834,13 @@ class MyCompBot(tk.Tk):
             }
         if action in {"press_key", "hotkey"}:
             return self.input.key(str(payload.get("key", "")), [str(item) for item in payload.get("modifiers", [])])
-        if action == "capture_display": return self.capture.capture()
-        if action == "capture_region": return self.capture.capture(dict(payload.get("region") or {}))
+        capture_options = {
+            "format": str(payload.get("format", "jpeg")),
+            "quality": int(payload.get("quality", 80) or 80),
+            "scale": float(payload.get("scale", 1.0) or 1.0),
+        }
+        if action == "capture_display": return self.capture.capture(**capture_options)
+        if action == "capture_region": return self.capture.capture(dict(payload.get("region") or {}), **capture_options)
         if action == "capture_window":
             selector = dict(payload.get("app") or {})
             for name in ("handle", "pid", "process_id", "name", "name_contains", "app_name"):
@@ -1795,11 +1853,19 @@ class MyCompBot(tk.Tk):
             if not windows:
                 raise ValueError("no matching window found")
             bounds = windows[0]["bounds"]
-            capture = self.capture.capture(bounds)
+            capture = self.capture.capture(bounds, **capture_options)
             capture["window"] = windows[0]
             return capture
         if action == "ocr":
-            capture = self.capture.capture(dict(payload.get("region") or {}) or None)
+            # PNG keeps glyph edges; OCR reads from the file path either way.
+            ocr_region = dict(payload.get("region") or {}) or None
+            if ocr_region is None and payload.get("window"):
+                selector = dict(payload.get("window") or {})
+                response = self.automation.execute({"action": "list_windows", **selector, "max_items": 1})
+                found = response.get("windows") or []
+                if found:
+                    ocr_region = found[0]["bounds"]
+            capture = self.capture.capture(ocr_region, format="png")
             from rapidocr_onnxruntime import RapidOCR
             engine = getattr(self, "_ocr_engine", None)
             if engine is None:
