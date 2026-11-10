@@ -115,7 +115,9 @@ def self_test(): return True
             while time.monotonic() < deadline:
                 try:
                     os.kill(child_pid, 0)
-                except ProcessLookupError:
+                except OSError:
+                    # ProcessLookupError on POSIX; WinError 87 on Windows once the
+                    # taskkill'd child is gone. Both mean the descendant is dead.
                     break
                 time.sleep(0.02)
             else:

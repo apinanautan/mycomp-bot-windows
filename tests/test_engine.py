@@ -192,13 +192,14 @@ class EngineTests(unittest.TestCase):
 
     @unittest.skipIf(build_server is None, "MCP SDK is not installed in this environment")
     def test_public_adapters_do_not_fallback_between_tools(self):
+        import asyncio
         settings = Settings(host="127.0.0.1", port=8645, allowed_roots=(self.root,), allow_shell=False, allowed_executables=(), data_dir=Path(self.temp.name) / "adapter-state", capability_dir=Path(self.temp.name) / "adapter-caps", redirect_uris=frozenset(), owner_consent_token=None, auth_mode="none", permission_level="full")
         server = build_server(settings)
         try:
             capability_execute = Mock(return_value={"ok": False, "error": "AX element was not found"})
             server._mycomp_resources.capabilities.execute = capability_execute
             accessibility = server._tool_manager._tools["accessibility"].fn
-            failed = accessibility("click", {"selector": {"role": "AXButton", "title": "Missing"}})
+            failed = asyncio.run(accessibility(action="click", parameters={"selector": {"role": "AXButton", "title": "Missing"}}))
             self.assertEqual(failed["status"], "failed")
             self.assertEqual(failed["error"]["backend"], "accessibility")
             capability_execute.assert_called_once()
@@ -209,7 +210,7 @@ class EngineTests(unittest.TestCase):
             capability_execute.reset_mock(return_value=True)
             capability_execute.return_value = {"ok": True, "result": {"items": [{"text": "Export", "confidence": 0.95, "frame": {"x": 10, "y": 20, "width": 30, "height": 40}, "center": {"x": 25, "y": 40}}], "screen_revision": "sha256:test"}}
             vision = server._tool_manager._tools["vision"].fn
-            observed = vision("ocr", text="Export", min_confidence=0.8)
+            observed = asyncio.run(vision(action="ocr", text="Export", min_confidence=0.8))
             self.assertEqual(observed["status"], "completed")
             self.assertEqual(observed["results"][0]["observation"]["items"][0]["center"], {"x": 25, "y": 40})
             capability_execute.assert_called_once_with("macos_ui", {"timeout_seconds": 30, "action": "ocr"})
@@ -217,7 +218,7 @@ class EngineTests(unittest.TestCase):
             capability_execute.reset_mock(return_value=True)
             capability_execute.return_value = {"ok": True, "result": {"moved": True, "point": {"x": 7, "y": 9}}}
             mouse = server._tool_manager._tools["mouse"].fn
-            moved = mouse("move", x=7, y=9)
+            moved = asyncio.run(mouse(action="move", x=7, y=9))
             self.assertEqual(moved["status"], "completed")
             capability_execute.assert_called_once_with("macos_ui", {"timeout_seconds": 30, "x": 7, "y": 9, "action": "mouse_move"})
         finally:
@@ -225,6 +226,7 @@ class EngineTests(unittest.TestCase):
 
     @unittest.skipIf(build_server is None, "MCP SDK is not installed in this environment")
     def test_api_rejects_private_targets_and_validates_redirect_destinations(self):
+        import asyncio
         # Elevated keeps SSRF protection; Full Control may reach private/loopback targets.
         settings = Settings(
             host="127.0.0.1", port=8645, allowed_roots=(self.root,), allow_shell=False,
@@ -235,10 +237,10 @@ class EngineTests(unittest.TestCase):
         server = build_server(settings)
         try:
             api = server._tool_manager._tools["api"].fn
-            self.assertEqual(api("file:///tmp/nope")["status"], "failed")
-            self.assertEqual(api("https://user:pass@example.com/")["status"], "failed")
+            self.assertEqual(asyncio.run(api(url="file:///tmp/nope"))["status"], "failed")
+            self.assertEqual(asyncio.run(api(url="https://user:pass@example.com/"))["status"], "failed")
             with patch("mycomp_bot_engine.server.socket.getaddrinfo", return_value=[(0, 0, 0, "", ("127.0.0.1", 443))]):
-                private = api("https://private.example/")
+                private = asyncio.run(api(url="https://private.example/"))
             self.assertEqual(private["error"]["code"], "PERMISSION_DENIED")
 
             class RedirectResponse:
@@ -254,7 +256,7 @@ class EngineTests(unittest.TestCase):
                 patch("mycomp_bot_engine.server.socket.getaddrinfo", side_effect=[[(0, 0, 0, "", ("93.184.216.34", 443))], [(0, 0, 0, "", ("127.0.0.1", 80))]]),
                 patch("mycomp_bot_engine.server.urllib.request.build_opener", return_value=opener),
             ):
-                redirected = api("https://public.example/")
+                redirected = asyncio.run(api(url="https://public.example/"))
             self.assertEqual(redirected["status"], "failed")
             self.assertEqual(redirected["error"]["code"], "PERMISSION_DENIED")
         finally:
@@ -262,6 +264,7 @@ class EngineTests(unittest.TestCase):
 
     @unittest.skipIf(build_server is None, "MCP SDK is not installed in this environment")
     def test_full_control_api_allows_private_targets(self):
+        import asyncio
         settings = Settings(
             host="127.0.0.1", port=8645, allowed_roots=(self.root,), allow_shell=False,
             allowed_executables=(), data_dir=Path(self.temp.name) / "api-full-state",
@@ -303,7 +306,7 @@ class EngineTests(unittest.TestCase):
                 patch("mycomp_bot_engine.server.socket.getaddrinfo", return_value=[(0, 0, 0, "", ("127.0.0.1", 443))]),
                 patch("mycomp_bot_engine.server.urllib.request.build_opener", return_value=opener),
             ):
-                result = api("https://private.example/")
+                result = asyncio.run(api(url="https://private.example/"))
             self.assertEqual(result["status"], "completed", result)
             self.assertEqual(result["results"][0]["status"], 200)
         finally:
@@ -325,6 +328,7 @@ class EngineTests(unittest.TestCase):
         self.assertIn('executable in {"bash", "zsh", "sh", "dash", "fish", "osascript"}', text)
         self.assertIn('executable.startswith("python")', text)
 
+    @unittest.skipIf(os.name == "nt", "POSIX /bin/echo fixture")
     def test_shell_requires_opt_in_and_runs_argv(self):
         disabled = Shell(False, (Path("/bin/echo"),), self.db, 1000)
         with self.assertRaises(PermissionError): disabled.run("foreground", ["/bin/echo", "x"], self.root)
@@ -345,6 +349,7 @@ class EngineTests(unittest.TestCase):
         denied = shell.control("deny", request["job_id"])
         self.assertEqual(denied["state"], "denied")
 
+    @unittest.skipIf(os.name == "nt", "POSIX /bin/echo fixture")
     def test_non_sudo_command_does_not_require_approval(self):
         shell = Shell(True, (Path("/bin/echo").resolve(),), self.db, 1000)
         result = shell.run("foreground", ["/bin/echo", "ok"], self.root)
@@ -458,6 +463,7 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(registry.manage("validate", "bad")["valid"])
         self.assertFalse(marker.exists())
 
+    @unittest.skipIf(os.name == "nt", "POSIX /bin/echo fixture")
     def test_background_immediate_exit_and_resume(self):
         shell = Shell(True, (Path("/bin/echo").resolve(),), self.db, 128)
         job = shell.run("background", ["/bin/echo", "quick"], self.root)
@@ -470,6 +476,7 @@ class EngineTests(unittest.TestCase):
         Shell(True, (Path("/bin/echo").resolve(),), self.db, 128)
         self.assertEqual(self.db.job("stale")["state"], "interrupted")
 
+    @unittest.skipIf(os.name == "nt", "POSIX /bin/echo fixture")
     def test_shell_persists_foreground_launch_failure(self):
         shell = Shell(True, (), self.db, 128)
         with self.assertRaises(PermissionError): shell.run("foreground", ["/bin/echo", "x"], self.root)

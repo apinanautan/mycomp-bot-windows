@@ -1,3 +1,15 @@
+## Version 1.1.37 — Green test suite on Windows
+
+The full suite now passes on Windows: **175 tests OK, 17 intentional POSIX-only skips** (previously 20 failures + 31 errors). No behaviour change beyond one schema fix.
+
+- **Schema fix**: `accessibility.action` had become `Optional`, which dropped the action `enum` from the published MCP tool schema. It is now `AccessibilityAction = "status"`, so the enum (including `wait_until`) is advertised again.
+- **POSIX-only tests are now skipped on Windows** instead of failing: `ShellLifecycleTests` relies on `os.fork()`, `SIGTERM`/`SIGKILL`, `killpg` and `/bin/*` fixtures that do not exist on Windows. Windows process-tree cleanup is covered by `test_windows_fast_shell_cleanup`.
+- **Liveness probe accepts Windows errors**: the capability-timeout test now treats any `OSError` (including `WinError 87`) as "process is gone", matching `taskkill /T /F` semantics.
+- **Tests updated for the async `@threaded` tool wrapper**: three engine tests called tool functions positionally and synchronously; they now pass keyword arguments and `asyncio.run(...)`.
+- **Stale tunnel-prompt tests rewritten**: `plugin_prompt` was intentionally redesigned in v1.1.23 to never inline the saved tunnel ID or key (the recipient GPT may be on another Platform account), but the tests still asserted the old behaviour. They now assert the current contract: no tunnel ID or secret in the prompt, the local MCP upstream is used rather than the caller's Tailscale base, and name/computer-name validation only.
+
+Note for contributors: the venv's `site-packages` copy of `mycomp_bot_engine` can lag the working tree (it is not installed editable). Run the suite with `PYTHONPATH=src` so tests import the source under change.
+
 ## Version 1.1.36 — wait_until and a before/after benchmark
 
 - `accessibility` gains a `wait_until` action: poll a selector (handle, name, name_contains, automation_id or control_type) until the window/element appears, optionally waiting for a descendant `text`, all inside ONE call. It reuses the warm window-map cache (existing matches resolve in ~1 ms) and re-scans the desktop once per second so genuinely new windows are noticed. A `TimeoutError` is raised on expiry so the caller knows nothing appeared. This collapses what used to be several `list_windows` round trips into one call.

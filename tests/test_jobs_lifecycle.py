@@ -9,6 +9,10 @@ from mycomp_bot_engine.database import Database
 from mycomp_bot_engine.jobs import Shell
 
 
+# These tests verify POSIX process-group semantics: os.fork(), SIGTERM/SIGKILL,
+# killpg and /bin/* fixtures do not exist on Windows, where the engine uses
+# taskkill instead. Windows cleanup is covered by test_windows_fast_shell_cleanup.
+@unittest.skipIf(os.name == "nt", "POSIX process-group and /bin/* semantics")
 class ShellLifecycleTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

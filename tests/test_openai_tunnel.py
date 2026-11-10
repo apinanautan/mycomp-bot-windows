@@ -26,7 +26,9 @@ class TunnelTests(unittest.TestCase):
             tunnel.tick()
             self.assertIsNone(tunnel.process)
 
-    def test_prompt_uses_saved_id_and_runtime_endpoint_without_secrets(self):
+    def test_prompt_never_exposes_saved_id_or_secrets(self):
+        # v1.1.23+ deliberately never inlines the saved tunnel id or key: the
+        # recipient GPT may be signed into a different Platform account.
         import json
         from unittest.mock import patch
         with tempfile.TemporaryDirectory() as directory:
@@ -35,34 +37,35 @@ class TunnelTests(unittest.TestCase):
             tunnel.settings.write_text(json.dumps({
                 "tunnel_id": "tunnel_" + "a" * 32,
                 "enabled": False,
-                "api_key": "sk-NEVER-EXPOSE-THIS-SECRET-000",
+                "api_key": "sk-FAKE-API-KEY",
             }), encoding="utf-8")
-            tunnel.secret.write_bytes(b"sk-ALSO-NEVER-EXPOSE")
+            tunnel.secret.write_bytes(b"sk-FAKE-SECRET")
             with patch.object(tunnel.secret.__class__, "read_bytes", side_effect=AssertionError("secrets must not be read")):
                 result = tunnel.plugin_prompt("ทดสอบปลั๊กอิน", "https://desktop.example.ts.net/mycomp")
-            self.assertIn("tunnel_" + "a" * 32, result)
+            self.assertNotIn("tunnel_" + "a" * 32, result)
             self.assertIn(tunnel.mcp_endpoint, result)
             self.assertIn("tools/list", result)
-            self.assertIn("authentication", result)
-            self.assertIn("Runtime ready", result)
+            self.assertIn("OpenAI Secure MCP Tunnel", result)
             self.assertGreater(result.count("\n"), 5)
             self.assertNotIn("\\n", result)
-            self.assertNotIn("sk-NEVER", result)
-            self.assertNotIn("sk-ALSO", result)
+            self.assertNotIn("sk-FAKE", result)
             self.assertNotIn("8455", result)
 
-    def test_missing_or_invalid_saved_id_is_rejected_and_not_replaced(self):
+    def test_prompt_ignores_stale_saved_settings(self):
+        # The prompt is generated from the entered name alone; a missing or
+        # malformed saved tunnel id must never abort it.
         import json
         with tempfile.TemporaryDirectory() as directory:
             tunnel = Tunnel(Path(directory))
-            for value in (None, "tunnel_" + "a" * 31, "tunnel_" + "z" * 32, "old_tunnel", "tunnel_" + "b" * 32 + "\\n"):
+            for value in (None, "tunnel_" + "a" * 31, "tunnel_" + "z" * 32, "old_tunnel", "tunnel_" + "b" * 32 + "\n"):
                 tunnel.directory.mkdir(parents=True, exist_ok=True)
                 tunnel.settings.write_text(json.dumps({"tunnel_id": value}), encoding="utf-8")
-                with self.subTest(value=value), self.assertRaises(ValueError):
-                    tunnel.plugin_prompt("ทดสอบปลั๊กอิน", "https://desktop.example.ts.net/mycomp")
+                with self.subTest(value=value):
+                    prompt = tunnel.plugin_prompt("ทดสอบปลั๊กอิน", "https://desktop.example.ts.net/mycomp")
+                    self.assertIn("ทดสอบปลั๊กอิน", prompt)
             tunnel.settings.unlink()
-            with self.assertRaises(ValueError):
-                tunnel.plugin_prompt("ทดสอบปลั๊กอิน", "https://desktop.example.ts.net/mycomp")
+            prompt = tunnel.plugin_prompt("ทดสอบปลั๊กอิน", "https://desktop.example.ts.net/mycomp")
+            self.assertIn("ทดสอบปลั๊กอิน", prompt)
 
     def test_runtime_process_and_prompt_use_same_binding(self):
         import json
@@ -86,7 +89,6 @@ class TunnelTests(unittest.TestCase):
             self.assertNotIn("sk-", tunnel.plugin_prompt("ทดสอบปลั๊กอิน", "https://desktop.example.ts.net/mycomp"))
             tunnel.stop()
 
-
     def test_dual_transport_prompt_and_name_and_failover(self):
         import json
         with tempfile.TemporaryDirectory() as directory:
@@ -98,17 +100,18 @@ class TunnelTests(unittest.TestCase):
             }), encoding="utf-8")
             prompt = tunnel.plugin_prompt("My Home Robot", "https://desktop.example.ts.net/mycomp")
             self.assertIn("My Home Robot", prompt)
-            self.assertIn("https://desktop.example.ts.net/mycomp/mcp", prompt)
-            self.assertIn("tunnel_" + "c" * 32, prompt)
+            self.assertIn("My Home Robot Tailscale", prompt)
+            self.assertIn("My Home Robot Tunnel", prompt)
+            # The saved id is never inlined.
+            self.assertNotIn("tunnel_" + "c" * 32, prompt)
             self.assertIn("Tailscale", prompt)
             self.assertIn("OpenAI Secure MCP Tunnel", prompt)
-            self.assertIn("failover", prompt)
+            self.assertIn("fallback", prompt)
             self.assertIn("tools/list", prompt)
             self.assertIn("OAuth", prompt)
-            self.assertIn("Runtime ready", prompt)
             self.assertNotIn("sk-", prompt)
 
-    def test_prompt_includes_per_machine_agent_desktop_after_dual_plugins(self):
+    def test_prompt_includes_skills_and_tool_guidance(self):
         import json
         with tempfile.TemporaryDirectory() as directory:
             tunnel = Tunnel(Path(directory))
@@ -120,39 +123,22 @@ class TunnelTests(unittest.TestCase):
             prompt = tunnel.plugin_prompt("User Named Bot", "https://desktop.example.ts.net/mycomp")
             self.assertIn("User Named Bot Tailscale", prompt)
             self.assertIn("User Named Bot Tunnel", prompt)
-            self.assertIn("User Named Bot Remote Desktop Commander", prompt)
-            self.assertIn("skills/development-loop/SKILL.md", prompt)
-            self.assertIn("skills/ponytail/SKILL.md", prompt)
-            self.assertIn("skills/ponytail/LICENSE", prompt)
-            self.assertIn("skills/agent-desktop-portable/SKILL.md", prompt)
-            self.assertIn("skills/connection-recovery/SKILL.md", prompt)
-            self.assertIn("skills/tool-routing/SKILL.md", prompt)
-            self.assertIn("skills/connection-recovery/PLAYBOOK.md", prompt)
-            self.assertIn("เลือกตัวที่เร็ว", prompt)
-            self.assertIn("ทั้งสาม", prompt)
-            self.assertIn("ชื่อปลั๊กอินช่องทาง Tailscale: User Named Bot Tailscale", prompt)
-            self.assertIn("ชื่อปลั๊กอินช่องทาง Tunnel: User Named Bot Tunnel", prompt)
-            self.assertNotIn("Dino", prompt)
-            self.assertIn("https://github.com/vercel-labs/agent-desktop", prompt)
-            self.assertIn("agent-desktop version", prompt)
-            self.assertIn("agent-desktop status", prompt)
-            self.assertIn("agent-desktop mcp", prompt)
-            self.assertIn("stdio", prompt)
-            self.assertIn("list-windows", prompt)
-            self.assertIn("snapshot", prompt)
-            self.assertIn("ref ID", prompt)
-            self.assertIn("bridge", prompt)
-            self.assertIn("Full Control", prompt)
-            self.assertIn("อนุญาตทั้งหมด", prompt)
-            self.assertIn("ห้ามพยายามข้ามระบบตรวจสอบความปลอดภัย", prompt)
-            self.assertIn("ยินยอม", prompt)
-            self.assertLess(prompt.index("ขั้นที่ 1:"), prompt.index("ขั้นที่ 2:"))
-            self.assertLess(prompt.index("ขั้นที่ 2:"), prompt.index("ขั้นที่ 3:"))
-            self.assertLess(prompt.index("ขั้นที่ 3:"), prompt.index("ขั้นที่ 4:"))
+            self.assertIn("skills/operator-clarity/SKILL.md", prompt)
+            for name in ("development-loop", "ponytail", "tool-routing",
+                         "connection-recovery", "agent-desktop-portable"):
+                self.assertIn(name, prompt)
+            self.assertIn("Remote Desktop Commander", prompt)
+            self.assertIn("dom_cdp.launch", prompt)
+            self.assertIn("ห้ามใช้ webbrowser.open", prompt)
+            self.assertLess(prompt.index("STEP 0"), prompt.index("STEP 1"))
+            self.assertLess(prompt.index("STEP 1"), prompt.index("STEP 2"))
+            self.assertLess(prompt.index("STEP 2"), prompt.index("STEP 3"))
+            self.assertLess(prompt.index("STEP 3"), prompt.index("STEP 4"))
+            self.assertLess(prompt.index("STEP 4"), prompt.index("STEP 5"))
             self.assertNotIn("\\n", prompt)
             self.assertNotIn("sk-", prompt)
 
-    def test_prompt_validates_plugin_name_and_tailscale_base(self):
+    def test_prompt_validates_plugin_name_and_computer_name(self):
         import json
         with tempfile.TemporaryDirectory() as directory:
             tunnel = Tunnel(Path(directory))
@@ -163,14 +149,19 @@ class TunnelTests(unittest.TestCase):
             for name in ("", " ", "x" * 81, "invalid\nname", None):
                 with self.subTest(name=name), self.assertRaises(ValueError):
                     tunnel.plugin_prompt(name, "https://desktop.example.ts.net/mycomp")
+            # The tailscale base is informational and never validated.
             for base in ("", "http://desktop.example.ts.net", "https://example.com",
                          "https://desktop.example.ts.net?token=private",
                          "https://name:secret@desktop.example.ts.net",
                          "https://desktop.example.ts.net:5555"):
-                with self.subTest(base=base), self.assertRaises(ValueError):
-                    tunnel.plugin_prompt("My Robot", base)
+                with self.subTest(base=base):
+                    prompt = tunnel.plugin_prompt("My Robot", base)
+                    self.assertIn("My Robot", prompt)
+            for machine in ("", "not a hostname", "x" * 64):
+                with self.subTest(machine=machine), self.assertRaises(ValueError):
+                    tunnel.plugin_prompt("My Robot", "https://desktop.example.ts.net/mycomp", computer_name=machine)
 
-    def test_tailscale_port_and_subpath_preserved(self):
+    def test_prompt_uses_local_endpoint_not_tailscale_base(self):
         import json
         with tempfile.TemporaryDirectory() as directory:
             tunnel = Tunnel(Path(directory))
@@ -179,8 +170,10 @@ class TunnelTests(unittest.TestCase):
                 "tunnel_id": "tunnel_" + "c" * 32,
             }), encoding="utf-8")
             prompt = tunnel.plugin_prompt("Test Bot", "https://desktop.example.ts.net:8443/mycomp/")
-            self.assertIn("https://desktop.example.ts.net:8443/mycomp/mcp", prompt)
-            self.assertNotIn("https://desktop.example.ts.net:8443/mycomp//mcp", prompt)
+            # The prompt points at the local MCP upstream, never the caller's base.
+            self.assertIn(tunnel.mcp_endpoint, prompt)
+            self.assertNotIn("https://desktop.example.ts.net:8443/mycomp/mcp", prompt)
+            self.assertNotIn("//mcp", prompt)
 
 
 if __name__ == "__main__":

@@ -792,7 +792,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
     @mcp.tool(description="Read or act on native Accessibility elements via the selected Windows UI Automation or macOS backend. Pass steps to run up to 40 actions in ONE call; reuse a returned handle instead of a name selector because handles skip the window scan entirely. No coordinate or OCR fallback.")
     @threaded
     def accessibility(
-        action: AccessibilityAction | None = None, parameters: dict[str, Any] | None = None, display_id: str | None = None,
+        action: AccessibilityAction = "status", parameters: dict[str, Any] | None = None, display_id: str | None = None,
         timeout_seconds: float = 30, approval: Literal["use_policy", "always_ask", "skip"] = "use_policy",
         dry_run: bool = False, request_id: str | None = None, metadata: dict[str, Any] | None = None,
         steps: list[dict[str, Any]] | None = None, stop_on_error: bool = True,
