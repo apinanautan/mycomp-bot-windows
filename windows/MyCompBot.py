@@ -608,6 +608,24 @@ class WindowsUIAutomation:
         self.module = module
         return module
 
+    def preload(self) -> None:
+        """Start the UIA warm-up during app startup.
+
+        The first UIA window enumeration costs ~1.7 s of COM/pywinauto init. Doing
+        it here means the first MCP call does not pay it, instead of making the
+        first tool call look slow.
+        """
+        try:
+            module = self._load()
+        except Exception:
+            return
+        starter = getattr(module, "warm", None)
+        if callable(starter):
+            try:
+                starter()
+            except Exception:
+                pass
+
     def _powershell(self, payload: dict[str, object]) -> dict[str, object]:
         if not UI_AUTOMATION_HELPER.is_file():
             raise RuntimeError("Windows UI Automation helper is missing")
@@ -985,6 +1003,7 @@ class MyCompBot(tk.Tk):
         self.input = WindowsInput()
         self.capture = WindowsCapture(RUNTIME / "screenshots")
         self.automation = WindowsUIAutomation()
+        self.automation.preload()
         values = {**_defaults(), **_read_env()}
         self.owner_consent_token = values["MYCOMP_OWNER_CONSENT_TOKEN"] or secrets.token_urlsafe(32)
         self.remote_commander_autostart_enabled = (

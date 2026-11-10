@@ -1,3 +1,21 @@
+## Version 1.1.39 — Cold scan moved off the first call, observe cached
+
+Diagnosis first: the "first window scan is slow" cost was **not** enumeration of properties (12 ms) and **not** this repo's code. In a fresh process, `Desktop(backend="uia").windows()` costs **1737 ms** once while the UIA COM layer and pywinauto's tree cache initialise; every later call is ~2 ms. That one-time cost landed on whichever tool call happened to be first, so it read as a per-call regression and scaled with machine load (1.7 s idle, 6.6 s loaded).
+
+- `UIAutomationBridge.warm()` primes the UIA layer on a background thread, and the desktop app calls it from `WindowsAutomation.preload()` during startup (`MycompBot.__init__`). The 1.7 s is now paid while the app boots instead of by the first MCP call.
+- `observe` / `inspect_elements` results are reused for 1 s (keyed by selector, limit and depth). Walking a heavy window such as the taskbar is the dominant cost inside a batch; the second observe of the same window is now free. `detail=True` always reads live values, and `reset_cache()` clears it.
+- New `tests/test_uia_bridge_cache.py` covers warm-up, list_windows cache identity plus `refresh` bypass, observe cache plus `detail` bypass, and per-step batch results.
+
+Interleaved A/B against v1.1.38 (same machine, alternating order, 5 trials each):
+
+| metric | 1.1.38 | 1.1.39 | change |
+|---|---|---|---|
+| first `list_windows` | 2393 ms | 115 ms | **−95%** |
+| batch of 4 steps | 499 ms | 287 ms | **−42%** |
+| repeating `observe` inside batch | 265 ms | **0 ms** | cached |
+
+Full suite: 180 tests OK, 17 skipped.
+
 ## Version 1.1.38 — wait_until and batch now actually reachable end-to-end
 
 v1.1.36 added `wait_until` to the UIA bridge, the MCP tool enum, the `windows_ui` capability and the manifest — but not to the desktop app's action router. `MyCompBot._execute_ui` only forwards a hard-coded set of actions to the bridge, so every `wait_until` and `batch` call that arrived over MCP fell through to `unsupported Windows desktop action`. The feature was documented and tested in isolation but unreachable from ChatGPT.

@@ -33,6 +33,8 @@ _MAP_AT = 0.0
 _HANDLES: dict = {}
 _ELEMENTS: dict = {}
 _ELEM_CACHE: dict = {}
+_OBSERVE_CACHE: dict = {}
+_WARMING = False
 
 
 def _desktop():
@@ -49,6 +51,7 @@ def reset_cache() -> None:
         _HANDLES.clear()
         _ELEMENTS.clear()
         _ELEM_CACHE.clear()
+        _OBSERVE_CACHE.clear()
 
 
 def _cached_elem(window) -> dict:
@@ -117,9 +120,35 @@ def _matches_name(name: str, sel: dict) -> bool:
     return True
 
 
+def warm() -> bool:
+    """Prime the UIA layer off the caller's critical path.
+
+    The first ``Desktop().windows()`` call in a process costs ~1.7 s (UIA COM
+    initialisation and pywinauto's tree cache); every later call is ~2 ms. Paying
+    that during app startup keeps the first MCP call fast instead of making it
+    look like a per-call regression.
+    """
+    global _WARMING
+    with _LOCK:
+        if _MAP:
+            return True
+        if _WARMING:
+            return False
+        _WARMING = True
+
+    def prime() -> None:
+        try:
+            _window_map(force=True)
+        except Exception:
+            pass
+
+    threading.Thread(target=prime, daemon=True, name="uia-warm").start()
+    return True
+
+
 def _window_map(force: bool = False) -> list:
     """Top-level windows, reused for a short window so scan cost is amortised."""
-    global _MAP, _MAP_AT
+    global _MAP, _MAP_AT, _WARMING
     with _LOCK:
         if not force and _MAP and time.monotonic() - _MAP_AT <= _MAP_TTL:
             return list(_MAP)
@@ -131,6 +160,7 @@ def _window_map(force: bool = False) -> list:
             except Exception:
                 continue
         _MAP, _MAP_AT = windows, time.monotonic()
+        _WARMING = False
         return list(_MAP)
 
 
@@ -298,6 +328,19 @@ def _run_action(req: dict) -> dict:
         target, _ = find(sel, include_descendants=False)
         limit = max(1, min(int(req.get("max_items", req.get("limit", 100))), 300))
         max_depth = max(0, min(int(req.get("max_depth", 4)), 8))
+        # Walking a heavy window's tree (the taskbar has hundreds of children) is
+        # the dominant cost inside a batch. Reuse the walk for a second unless the
+        # caller asked for the full detail fields.
+        cache_key = None
+        if not bool(req.get("detail", False)):
+            try:
+                cache_key = (json.dumps(sel, sort_keys=True, default=str), limit, max_depth)
+            except Exception:
+                cache_key = None
+            if cache_key is not None:
+                cached = _OBSERVE_CACHE.get(cache_key)
+                if cached is not None and time.monotonic() - cached[1] <= _ELEM_CACHE_TTL:
+                    return dict(cached[0])
         out = [elem(target)]
         queue = [(target, 0)]
         index = 0
@@ -318,7 +361,13 @@ def _run_action(req: dict) -> dict:
                 if len(out) >= limit:
                     break
                 queue.append((child, depth + 1))
-        return {"backend": "pywinauto-uia", "root": out[0], "elements": out, "count": len(out)}
+        result = {"backend": "pywinauto-uia", "root": out[0], "elements": out, "count": len(out)}
+        if cache_key is not None:
+            with _LOCK:
+                if len(_OBSERVE_CACHE) > 128:
+                    _OBSERVE_CACHE.clear()
+                _OBSERVE_CACHE[cache_key] = (dict(result), time.monotonic())
+        return result
     if action == "batch":
         steps = req.get("steps") or []
         if not isinstance(steps, list) or not 1 <= len(steps) <= 40:
