@@ -1795,7 +1795,10 @@ class MyCompBot(tk.Tk):
             arguments = [str(item) for item in payload.get("arguments", [])]
             process = subprocess.Popen([target, *arguments], cwd=str(payload.get("cwd") or ROOT), creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
             return {"launched": True, "process_id": process.pid, "target": target, "arguments": arguments}
-        uia_actions = {"status", "list_windows", "observe", "observe_summary", "observe_changes", "inspect_elements", "find_element", "focus", "activate_app", "set_value", "menu_select", "set_window_frame", "close_window", "minimize_window"}
+        # wait_until and batch also run inside the UIA bridge: without them here the
+        # app falls through to "unsupported Windows desktop action" and the v1.1.35/
+        # v1.1.36 bridge features are unreachable from MCP.
+        uia_actions = {"status", "list_windows", "observe", "observe_summary", "observe_changes", "inspect_elements", "find_element", "focus", "activate_app", "set_value", "menu_select", "set_window_frame", "close_window", "minimize_window", "wait_until", "batch"}
         if action in uia_actions or (action == "click" and x is None and y is None): return self.automation.execute(payload)
         if action == "mouse_move": return self.input.move(float(x), float(y))
         if action == "click": return self.input.mouse((WindowsInput.MOUSEEVENTF_LEFTDOWN, WindowsInput.MOUSEEVENTF_LEFTUP), float(x), float(y))

@@ -25,12 +25,14 @@ from pywinauto import Desktop
 _MAP_TTL = 20.0         # window map lifetime for selector scans
 _HANDLE_TTL = 300.0     # resolved handle lifetime
 _ELEMENT_TTL = 60.0     # resolved element lifetime
+_ELEM_CACHE_TTL = 1.0   # short-lived element records for list_windows
 _LOCK = threading.RLock()
 _DESKTOP = None
 _MAP: list = []
 _MAP_AT = 0.0
 _HANDLES: dict = {}
 _ELEMENTS: dict = {}
+_ELEM_CACHE: dict = {}
 
 
 def _desktop():
@@ -46,6 +48,28 @@ def reset_cache() -> None:
         _MAP, _MAP_AT = [], 0.0
         _HANDLES.clear()
         _ELEMENTS.clear()
+        _ELEM_CACHE.clear()
+
+
+def _cached_elem(window) -> dict:
+    """Element record for a top-level window, reused for a short interval.
+
+    Every field crosses the UIA boundary, so re-reading all of them for every
+    window on every list_windows call dominates the cost and makes the timing
+    jitter between roughly 13 and 55 ms. Window titles/bounds do not change
+    meaningfully inside one second.
+    """
+    handle = int(window.handle or 0)
+    now = time.monotonic()
+    cached = _ELEM_CACHE.get(handle)
+    if cached is not None and now - cached[1] <= _ELEM_CACHE_TTL:
+        return dict(cached[0])
+    record = elem(window, detail=False)
+    with _LOCK:
+        if len(_ELEM_CACHE) > 512:
+            _ELEM_CACHE.clear()
+        _ELEM_CACHE[handle] = (dict(record), now)
+    return record
 
 
 def elem(w, detail: bool = True) -> dict:
@@ -191,12 +215,16 @@ def _run_action(req: dict) -> dict:
     if action == "list_windows":
         limit = max(1, min(int(req.get("max_items", req.get("limit", 200))), 500))
         detail = bool(req.get("detail", False))
+        refresh = bool(req.get("refresh", False))
+        if refresh:
+            with _LOCK:
+                _ELEM_CACHE.clear()
         windows = []
-        for window in _window_map(force=bool(req.get("refresh", False))):
+        for window in _window_map(force=refresh):
             try:
                 if _has_selector(sel) and not _matches_name(window.window_text() or "", sel):
                     continue
-                windows.append(elem(window, detail=detail))
+                windows.append(elem(window, detail=True) if detail else _cached_elem(window))
             except Exception:
                 continue
             if len(windows) >= limit:

@@ -15,6 +15,23 @@ class WindowsHostTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+    def test_bridge_actions_are_routed_to_uia_automation(self):
+        """Every action the windows_ui capability forwards to the bridge must be
+        dispatched by _execute_ui; otherwise the app answers
+        'unsupported Windows desktop action' and the feature is unreachable
+        from MCP even though the bridge implements it."""
+        from windows import MyCompBot as app
+        instance = app.MyCompBot.__new__(app.MyCompBot)
+        instance.automation = MagicMock()
+        instance.automation.execute.return_value = {"ok": True}
+        for action in ("wait_until", "batch", "observe", "list_windows", "find_element",
+                       "set_value", "close_window", "minimize_window", "set_window_frame",
+                       "inspect_elements", "observe_summary", "observe_changes"):
+            with self.subTest(action=action):
+                instance._execute_ui({"action": action, "name_contains": "x", "steps": []})
+                self.assertTrue(instance.automation.execute.called, action)
+                instance.automation.reset_mock()
+
     def test_capture_window_uses_selected_uia_bounds_without_input(self):
         from windows import MyCompBot as app
         instance = app.MyCompBot.__new__(app.MyCompBot)

@@ -1,3 +1,15 @@
+## Version 1.1.38 — wait_until and batch now actually reachable end-to-end
+
+v1.1.36 added `wait_until` to the UIA bridge, the MCP tool enum, the `windows_ui` capability and the manifest — but not to the desktop app's action router. `MyCompBot._execute_ui` only forwards a hard-coded set of actions to the bridge, so every `wait_until` and `batch` call that arrived over MCP fell through to `unsupported Windows desktop action`. The feature was documented and tested in isolation but unreachable from ChatGPT.
+
+- `windows/MyCompBot.py`: `wait_until` and `batch` are now in the `uia_actions` routing set, so the desktop app forwards them to the pywinauto bridge like the other UIA actions.
+- `windows/UIAutomationBridge.py`: `list_windows` reuses element records for 1 s. Previously every call re-read name, bounds, automation id, control type and process id across the UIA boundary for every window, which both dominated the cost and made timings swing between ~13 ms and ~55 ms. `refresh=True` still forces a full re-enumeration (and a `detail=True` call still reads live values).
+- Added `test_bridge_actions_are_routed_to_uia_automation` so any future action implemented in the bridge but missing from the router fails the suite instead of silently breaking at runtime.
+
+Measured on this machine (15 windows open): `list_windows` cached call 0.04 ms, after the 1 s TTL 14.8 ms, forced `refresh=True` 1.6 s. `_execute_ui` → bridge: `wait_until` match 2 ms, timeout raises `TimeoutError`, 3-step `batch` 90 ms.
+
+Note: the earlier UIA "16.6 ms → 50.5 ms slower" reading was measurement noise — both versions ran byte-identical bridge code and single samples vary 13–55 ms. The real defect was the per-window property re-read, now cached.
+
 ## Version 1.1.37 — Green test suite on Windows
 
 The full suite now passes on Windows: **175 tests OK, 17 intentional POSIX-only skips** (previously 20 failures + 31 errors). No behaviour change beyond one schema fix.
