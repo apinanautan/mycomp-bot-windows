@@ -60,6 +60,10 @@ def _cached_elem(window) -> dict:
     meaningfully inside one second.
     """
     handle = int(window.handle or 0)
+    if not handle:
+        # Never cache on a missing handle: every such window would share key 0
+        # and later calls would report another window's title and bounds.
+        return elem(window, detail=False)
     now = time.monotonic()
     cached = _ELEM_CACHE.get(handle)
     if cached is not None and now - cached[1] <= _ELEM_CACHE_TTL:
