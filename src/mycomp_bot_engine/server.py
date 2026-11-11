@@ -459,12 +459,15 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
                         step_action = str(step.get("action", ""))
                         if step_action not in AccessibilityAction.__args__:
                             raise ValueError("unsupported accessibility action")
-                        read_only = {"status", "list_windows", "observe", "observe_summary", "observe_changes", "inspect_elements", "find_element"}
+                        read_only = {"status", "list_windows", "observe", "observe_summary", "observe_changes", "inspect_elements", "find_element", "wait_until"}
                         policy.require("normal" if step_action in read_only else "elevated", "batch_execute.accessibility." + step_action)
                         payload = {key: value for key, value in step.items() if key not in {"kind", "action", "execution", "privilege"}}
                         payload.setdefault("allow_ocr_fallback", False)
                         payload["timeout_seconds"] = float(step.get("timeout_seconds", 30))
+                        changed = changed or step_action not in read_only
                         value = ui_result(step_action, payload, backend="accessibility")
+                        if isinstance(value, dict) and value.get("ok") is False:
+                            raise RuntimeError("accessibility action failed: " + str(value.get("error", value)))
                         results.append({
                             "index": index, "kind": kind, "action": step_action, "ok": True,
                             "result": value,
@@ -478,6 +481,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
                         policy.require("normal" if step_action in read_only else "elevated", "batch_execute.dom_cdp." + step_action)
                         payload = {key: value for key, value in step.items() if key not in {"kind", "action", "execution", "privilege"}}
                         payload["timeout_seconds"] = float(step.get("timeout_seconds", 60))
+                        changed = changed or step_action not in read_only
                         value = internal_capability("browser_cdp", {**payload, "action": step_action})
                         results.append({
                             "index": index, "kind": kind, "action": step_action, "ok": True,
@@ -828,7 +832,11 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
                 payload["display_id"] = display_id
             value = ui_result("batch", payload, backend="accessibility")
             changed = any(item not in read_only for item in requested)
-            return envelope(request_id=request_id, changed=changed, results=[value], started=started)
+            completed = value.get("results", []) if isinstance(value, dict) else []
+            failures = sum(1 for item in completed if not item.get("ok", False))
+            status = "partial" if failures and failures < len(completed) else "failed" if failures else "completed"
+            return envelope(request_id=request_id, status=status, changed=changed, results=[value],
+                            warnings=[f"{failures} accessibility step(s) failed"] if failures else [], started=started)
         except Exception as error:
             return failed(error, request_id=request_id, started=started, backend="accessibility")
 

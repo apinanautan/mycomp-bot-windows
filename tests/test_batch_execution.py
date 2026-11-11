@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from mycomp_bot_engine.config import Settings
 from mycomp_bot_engine.server import build_server
@@ -68,6 +69,42 @@ class BatchExecutionTests(unittest.TestCase):
             self.assertEqual(len(r["results"]),1)
             r=self.call(server,[{"kind":"filesystem","operation":"read","path":"example.txt"}]*13)
             self.assertEqual(r["status"],"failed")
+        finally:
+            server._mycomp_resources.close()
+
+    def test_wait_until_is_read_only_and_bridge_failure_is_reported(self):
+        server = self.server("normal")
+        try:
+            bridge = server._mycomp_resources.capabilities
+            step = {"kind": "accessibility", "action": "wait_until",
+                    "selector": {"name_contains": "MyComp"}, "timeout_seconds": 1}
+            with patch.object(bridge, "execute", return_value={"ok": True, "result": {"found": True}}):
+                result = self.call(server, [step])
+            self.assertEqual(result["status"], "completed", result)
+            self.assertFalse(result["changed"])
+            with patch.object(bridge, "execute", return_value={"ok": True, "result": {"ok": False, "error": "not found"}}):
+                result = self.call(server, [step])
+            self.assertEqual(result["status"], "failed", result)
+            self.assertFalse(result["results"][0]["ok"])
+        finally:
+            server._mycomp_resources.close()
+
+    def test_accessibility_batch_reports_nested_failures(self):
+        server = self.server("normal")
+        try:
+            bridge = server._mycomp_resources.capabilities
+            tool = server._tool_manager.get_tool("accessibility")
+            response = {"ok": True, "result": {"results": [
+                {"index": 0, "ok": True, "result": {}},
+                {"index": 1, "ok": False, "error": {"message": "not found"}},
+            ], "ok": False}}
+            with patch.object(bridge, "execute", return_value=response):
+                result = asyncio.run(tool.fn(steps=[
+                    {"action": "list_windows"}, {"action": "wait_until", "selector": {"name_contains": "missing"}}
+                ]))
+            self.assertEqual(result["status"], "partial", result)
+            self.assertFalse(result["changed"])
+            self.assertTrue(result["warnings"])
         finally:
             server._mycomp_resources.close()
 

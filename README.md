@@ -1,3 +1,11 @@
+## Version 1.1.40 — Correct and observable Batch execution
+
+- `batch_execute` treats Accessibility `wait_until` as a read-only operation, matching the standalone tool permission. Every other batch step retains its independent permission check.
+- An Accessibility bridge result with `ok: false` now fails the corresponding `batch_execute` step instead of reporting a false success.
+- Accessibility multi-step calls report `partial` or `failed` when nested bridge actions fail; warnings preserve the failed step count.
+- Potentially mutating Accessibility or Chrome/CDP batch steps conservatively mark `changed=true` even if an action fails after dispatch, preventing unsafe blind retries.
+- Regression tests cover these boundaries. Existing OAuth, Tunnel ID, permitted roots, executable policy and versioned install directories remain unchanged.
+
 ## Version 1.1.39 — Cold scan moved off the first call, observe cached
 
 Diagnosis first: the "first window scan is slow" cost was **not** enumeration of properties (12 ms) and **not** this repo's code. In a fresh process, `Desktop(backend="uia").windows()` costs **1737 ms** once while the UIA COM layer and pywinauto's tree cache initialise; every later call is ~2 ms. That one-time cost landed on whichever tool call happened to be first, so it read as a per-call regression and scaled with machine load (1.7 s idle, 6.6 s loaded).
