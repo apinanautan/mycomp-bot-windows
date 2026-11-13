@@ -32,6 +32,16 @@ class UiaBridgeCacheTests(unittest.TestCase):
             self.skipTest("pywinauto is not installed")
         self.bridge = _load()
 
+    def test_warm_failure_releases_flag_for_retry(self):
+        from unittest.mock import patch
+        with patch.object(self.bridge, "_window_map", side_effect=RuntimeError("temporary UIA failure")):
+            self.assertTrue(self.bridge.warm())
+            deadline = time.monotonic() + 3
+            while self.bridge._WARMING and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertFalse(self.bridge._WARMING)
+
+
     def test_warm_is_non_blocking_and_primes_the_map(self):
         started = time.perf_counter()
         result = self.bridge.warm()
@@ -58,8 +68,14 @@ class UiaBridgeCacheTests(unittest.TestCase):
         self.assertEqual([w["name"] for w in cached["windows"]],
                          [w["name"] for w in first["windows"]])
 
-        refreshed = self.bridge.main({"action": "list_windows", "limit": 40, "refresh": True})
-        self.assertEqual(refreshed["count"], first["count"])
+        # Live windows can open and close between two real UIA scans.
+        # Verify the explicit refresh forces a new scan rather than comparing
+        # unstable window counts while other desktop applications are active.
+        from unittest.mock import patch
+        with patch.object(self.bridge, "_window_map", wraps=self.bridge._window_map) as scan:
+            refreshed = self.bridge.main({"action": "list_windows", "limit": 40, "refresh": True})
+        self.assertGreaterEqual(refreshed["count"], 1)
+        self.assertTrue(any(call.kwargs.get("force") is True for call in scan.call_args_list))
 
     def test_observe_cache_reuses_walk_and_detail_bypasses_it(self):
         windows = self.bridge.main({"action": "list_windows", "limit": 40})["windows"]

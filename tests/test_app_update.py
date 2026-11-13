@@ -318,5 +318,88 @@ class AppUpdateTests(unittest.TestCase):
             self.assertEqual((checkout / "user-work.txt").read_text(), "local edits")
 
 
+
+class StartupAutoUpdateTests(unittest.TestCase):
+    """Startup checks are quiet and install only verified managed app copies."""
+
+    def _bot(self):
+        import queue
+        from unittest.mock import MagicMock
+        from windows import MyCompBot as gui
+        bot = object.__new__(gui.MyCompBot)
+        bot.update_queue = queue.Queue()
+        bot.update_status = MagicMock()
+        bot.update_busy = True
+        bot._update_automatic = True
+        bot._closing = False
+        return bot
+
+    def test_startup_requests_one_automatic_background_check(self):
+        from windows import MyCompBot as gui
+        bot = self._bot()
+        bot.update_busy = False
+        with patch.object(gui.threading, "Thread") as background:
+            gui.MyCompBot._request_startup_update(bot)
+        self.assertTrue(bot._update_automatic)
+        self.assertTrue(bot.update_busy)
+        background.assert_called_once()
+        background.return_value.start.assert_called_once()
+
+    def test_automatic_current_is_silent(self):
+        from windows import MyCompBot as gui
+        bot = self._bot()
+        bot.update_queue.put(("current", "v1.1.41"))
+        with patch.object(gui.messagebox, "showinfo") as info:
+            gui.MyCompBot._process_update_events(bot)
+        self.assertFalse(bot.update_busy)
+        info.assert_not_called()
+
+    def test_automatic_managed_release_downloads_without_prompt(self):
+        from windows import MyCompBot as gui
+        bot = self._bot()
+        release = {"tag": "v1.1.42", "url": "https://example.invalid/release.zip"}
+        bot.update_queue.put(("available", release))
+        with tempfile.TemporaryDirectory() as folder:
+            appdata = Path(folder)
+            root = appdata / "versions" / "v1.1.41"
+            root.mkdir(parents=True)
+            (root / ".mycomp-install-complete").write_text("1.1.41")
+            with patch.object(gui, "ROOT", root), patch.object(gui, "APP_DATA", appdata), \
+                 patch.object(gui.threading, "Thread") as worker, \
+                 patch.object(gui.messagebox, "askyesno") as prompt:
+                gui.MyCompBot._process_update_events(bot)
+            worker.assert_called_once()
+            self.assertEqual(worker.call_args.kwargs["args"], (release,))
+            worker.return_value.start.assert_called_once()
+            prompt.assert_not_called()
+            self.assertTrue(bot.update_busy)
+
+    def test_automatic_checkout_never_replaces_dirty_source(self):
+        from windows import MyCompBot as gui
+        bot = self._bot()
+        bot.update_queue.put(("available", {"tag": "v1.1.42"}))
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "checkout"
+            root.mkdir()
+            (root / ".git").mkdir()
+            with patch.object(gui, "ROOT", root), patch.object(gui, "APP_DATA", Path(folder)), \
+                 patch.object(gui.threading, "Thread") as worker, \
+                 patch.object(gui.messagebox, "askyesno") as prompt:
+                gui.MyCompBot._process_update_events(bot)
+            worker.assert_not_called()
+            prompt.assert_not_called()
+            self.assertFalse(bot.update_busy)
+
+    def test_automatic_network_error_keeps_app_running(self):
+        from windows import MyCompBot as gui
+        bot = self._bot()
+        bot.update_queue.put(("error", "network unavailable"))
+        with patch.object(gui.messagebox, "showerror") as dialog:
+            gui.MyCompBot._process_update_events(bot)
+        dialog.assert_not_called()
+        self.assertFalse(bot.update_busy)
+        self.assertIn("network unavailable", bot.update_status.set.call_args.args[0])
+
+
 if __name__ == "__main__":
     unittest.main()

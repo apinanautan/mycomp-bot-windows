@@ -997,6 +997,7 @@ class MyCompBot(tk.Tk):
         self.remote_account_probe_next = 0.0
         self.update_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.update_busy = False
+        self._update_automatic = False
         self._closing = False
         self.update_status = tk.StringVar(value=f"Version {APP_VERSION}")
         self.temporary_url: str | None = None
@@ -1030,6 +1031,8 @@ class MyCompBot(tk.Tk):
         # is missing the Tailscale URL; auto-detect the actual machine instead.
         self.after(250, self._start_tailscale_discovery)
         self.after(200, self._poll)
+        # Check GitHub once per launch without delaying the desktop or engine.
+        self.after(1200, self._request_startup_update)
         threading.Thread(target=self._autofix_watchdog_loop, daemon=True, name="mycomp-tailscale-watchdog").start()
         self.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
         self._setup_tray()
@@ -1178,12 +1181,17 @@ class MyCompBot(tk.Tk):
         ttk.Label(frame, style="MyComp.TLabel", text="Mouse/keyboard actions require Elevated. Accessibility uses Windows UI Automation; screen capture uses native Win32 capture. OCR uses RapidOCR with ONNX Runtime. Tailscale provides the public HTTPS connection.", wraplength=700).grid(row=19, column=0, columnspan=3, sticky="w", pady=(12, 0))
         ttk.Label(frame, style="MyComp.TLabel", textvariable=self.tailscale_status, wraplength=700).grid(row=20, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
-    def _request_update(self) -> None:
-        if self.update_busy:
+    def _request_startup_update(self) -> None:
+        """Run a quiet release check every time the desktop application starts."""
+        self._request_update(automatic=True)
+
+    def _request_update(self, *, automatic: bool = False) -> None:
+        if self.update_busy or getattr(self, "_closing", False):
             return
+        self._update_automatic = automatic
         self.update_busy = True
         self.update_status.set("Checking GitHub for updates...")
-        threading.Thread(target=self._check_update_worker, daemon=True).start()
+        threading.Thread(target=self._check_update_worker, daemon=True, name="mycomp-update-check").start()
 
     def _check_update_worker(self) -> None:
         try:
@@ -1217,9 +1225,29 @@ class MyCompBot(tk.Tk):
                 if event == "current":
                     self.update_busy = False
                     self.update_status.set(f"Version {APP_VERSION} — up to date")
-                    messagebox.showinfo("MyComp Bot update", f"MyComp Bot {APP_VERSION} is up to date.")
+                    if not getattr(self, "_update_automatic", False):
+                        messagebox.showinfo("MyComp Bot update", f"MyComp Bot {APP_VERSION} is up to date.")
                 elif event in ("available", "migrate"):
                     same_release = event == "migrate"
+                    if getattr(self, "_update_automatic", False):
+                        # A developer checkout is never silently replaced.
+                        managed = (
+                            (ROOT / ".mycomp-install-complete").is_file()
+                            and ROOT.parent.name == "versions"
+                            and ROOT.parent.parent.resolve() == APP_DATA.resolve()
+                        )
+                        if not same_release and managed:
+                            self.update_status.set(f"Downloading {value['tag']} automatically...")
+                            threading.Thread(
+                                target=self._prepare_update_worker, args=(value,), daemon=True,
+                                name="mycomp-auto-update-download",
+                            ).start()
+                        else:
+                            self.update_busy = False
+                            self.update_status.set(
+                                f"Version {APP_VERSION} — {value['tag']} available; manual install required"
+                            )
+                        continue
                     prompt = (
                         f"MyComp Bot {value['tag']} is already the latest release.\n\n"
                         "Install a separate managed app copy now? Future updates will "
@@ -1252,7 +1280,8 @@ class MyCompBot(tk.Tk):
                 elif event == "error":
                     self.update_busy = False
                     self.update_status.set(f"Update failed: {value}")
-                    messagebox.showerror("MyComp Bot update", str(value))
+                    if not getattr(self, "_update_automatic", False):
+                        messagebox.showerror("MyComp Bot update", str(value))
         except queue.Empty:
             pass
 

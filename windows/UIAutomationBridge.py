@@ -137,10 +137,24 @@ def warm() -> bool:
         _WARMING = True
 
     def prime() -> None:
+        # UI Automation runs in a background Windows thread: initialize COM
+        # in that exact thread before touching UIA's COM-backed wrappers.
+        # Always clear the warming flag so transient failures can retry.
+        global _WARMING
+        pythoncom = None
         try:
+            if sys.platform == "win32":
+                import pythoncom as _pythoncom
+                pythoncom = _pythoncom
+                pythoncom.CoInitialize()
             _window_map(force=True)
         except Exception:
             pass
+        finally:
+            if pythoncom is not None:
+                pythoncom.CoUninitialize()
+            with _LOCK:
+                _WARMING = False
 
     threading.Thread(target=prime, daemon=True, name="uia-warm").start()
     return True
