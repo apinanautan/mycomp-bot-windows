@@ -98,6 +98,49 @@ def _fast_windows(payload: dict) -> dict | None:
     win32gui.EnumWindows(add_window, None)
     return {"backend": "win32-top-level", "windows": windows, "count": len(windows)}
 
+
+_DIRECT_BRIDGE = None
+_FAST_UIA_READS = {
+    "observe", "observe_summary", "observe_changes", "inspect_elements",
+    "find_element", "wait_until",
+}
+
+
+def _direct_uia(payload: dict) -> dict | None:
+    """Read a known window's UIA tree without waiting on Tk's event loop."""
+    global _DIRECT_BRIDGE
+    import importlib.util
+    import sys
+
+    selector = payload.get("selector") if isinstance(payload.get("selector"), dict) else {
+        key: payload[key] for key in (
+            "handle", "pid", "process_id", "name", "name_contains", "app_name",
+            "automation_id", "control_type",
+        ) if key in payload
+    }
+    if not selector.get("handle"):
+        # Do not guess a target if multiple windows share a title.
+        if not any(selector.get(key) for key in ("name", "name_contains", "app_name", "pid", "process_id")):
+            return None
+        if selector.get("automation_id") or selector.get("control_type"):
+            return None
+        lookup = _fast_windows({"selector": selector, "limit": 2})
+        if lookup is None or lookup["count"] != 1:
+            return None
+        selector = {**selector, "handle": lookup["windows"][0]["handle"]}
+
+    if _DIRECT_BRIDGE is None:
+        source = Path(sys.prefix).parent / "windows" / "UIAutomationBridge.py"
+        if not source.is_file():
+            return None
+        spec = importlib.util.spec_from_file_location("mycomp_readonly_uia", source)
+        if spec is None or spec.loader is None:
+            raise RuntimeError("Installed UI Automation bridge cannot be loaded")
+        bridge = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bridge)
+        _DIRECT_BRIDGE = bridge
+    return {"ok": True, "result": _DIRECT_BRIDGE.main({**payload, "selector": selector})}
+
 def execute(payload):
     if not isinstance(payload, dict):
         raise ValueError("payload must be an object")
@@ -117,10 +160,16 @@ def execute(payload):
     if action == "status":
         return {"ok": True, "result": {"backend": "win32-top-level", "available": True,
                                          "cached_windows": 0}}
-    if action == "list_windows" and not (_runtime() / "ui-stop-request.json").exists():
-        quick = _fast_windows(payload)
-        if quick is not None:
-            return {"ok": True, "result": quick}
+    stopped = (_runtime() / "ui-stop-request.json").exists()
+    if not stopped:
+        if action == "list_windows":
+            quick = _fast_windows(payload)
+            if quick is not None:
+                return {"ok": True, "result": quick}
+        if action in _FAST_UIA_READS:
+            direct = _direct_uia(payload)
+            if direct is not None:
+                return direct
     return _request({**payload, "action": action})
 
 

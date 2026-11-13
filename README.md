@@ -1,3 +1,10 @@
+## Version 1.1.42 — Direct read-only UIA without GUI queue stalls
+
+- Read-only Accessibility inspection (observe, observe_summary, observe_changes, inspect_elements, find_element, wait_until) uses the installed pywinauto UI Automation bridge directly when a window handle is explicitly selected or a Win32 title lookup is unique. This avoids blocking on the MyComp Bot GUI's Tk event loop and skips desktop-wide scans for known handles.
+- Ambiguous window names and UIA-only selector attributes still use the original owner-supervised route. Every mutating action (click, focus, set_value, window state, input) remains on the original route and retains the exact permission policy; the owner's stop switch also prevents direct read-only inspection.
+- Regression tests cover unique matching, ambiguous-name fallback, and owner stop behavior. The full Windows suite passed 190 total (173 pass, 17 POSIX-only skips, zero failures/errors).
+- A local, isolated handle-specific UIA observe completed in 40.9 ms; source read-only capability with a uniquely matched window completed in 372.8 ms including import time. These are not ChatGPT round-trip timings; post-install live verification is required.
+
 ## Version 1.1.41 — Fast, owner-safe Windows window discovery
 
 - Windows list_windows now uses a live Win32 top-level window enumeration when only names, handles, PIDs and bounds are needed. It does not block on the desktop application's Tk event loop or a slow UI Automation desktop scan.

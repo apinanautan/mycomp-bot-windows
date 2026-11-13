@@ -68,5 +68,49 @@ class NativeWindowListingTests(unittest.TestCase):
         self.assertTrue(result["result"]["available"])
 
 
+    def test_unique_window_name_resolves_to_direct_readonly_uia(self):
+        class FakeBridge:
+            def main(self, req):
+                return {"backend": "test", "handle": req["selector"]["handle"]}
+
+        with patch.object(self.module, "_DIRECT_BRIDGE", FakeBridge()):
+            with patch.object(self.module, "_fast_windows", return_value={
+                "count": 1, "windows": [{"handle": 43210}],
+            }):
+                with patch.object(self.module, "_request", side_effect=AssertionError("GUI should not be used")):
+                    response = self.module.execute({
+                        "action": "observe", "selector": {"name": "Unique window"},
+                        "limit": 3,
+                    })
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["result"]["handle"], 43210)
+
+    def test_ambiguous_title_stays_on_existing_host(self):
+        with patch.object(self.module, "_fast_windows", return_value={
+            "count": 2, "windows": [{"handle": 1}, {"handle": 2}],
+        }):
+            with patch.object(self.module, "_request", return_value={
+                "ok": True, "result": {"from_host": True},
+            }) as host:
+                result = self.module.execute({
+                    "action": "observe", "selector": {"name_contains": "duplicate"},
+                })
+        self.assertTrue(result["result"]["from_host"])
+        host.assert_called_once()
+
+    def test_owner_stop_blocks_direct_readonly_uia(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            (runtime / "ui-stop-request.json").write_text("{}", encoding="utf-8")
+            with patch.object(self.module, "_runtime", return_value=runtime):
+                with patch.object(self.module, "_direct_uia", side_effect=AssertionError("stop bypass")):
+                    with patch.object(self.module, "_request", return_value={"ok": False, "stopped": True}):
+                        response = self.module.execute({
+                            "action": "observe", "selector": {"handle": 123},
+                        })
+        self.assertFalse(response["ok"])
+        self.assertTrue(response["stopped"])
+
+
 if __name__ == "__main__":
     unittest.main()
