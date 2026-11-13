@@ -55,6 +55,49 @@ def _request(payload: dict) -> dict:
     raise TimeoutError(f"Windows UI command {payload.get('action')!r} timed out after {payload.get('timeout_seconds', 30)} seconds")
 
 
+
+def _fast_windows(payload: dict) -> dict | None:
+    """Live Win32 top-level snapshot; only the UIA-only detail filters use the host."""
+    selector = payload.get("selector") if isinstance(payload.get("selector"), dict) else payload
+    if payload.get("detail") or selector.get("automation_id") or selector.get("control_type"):
+        return None
+    import win32gui
+    import win32process
+
+    limit = max(1, min(int(payload.get("max_items", payload.get("limit", 200))), 500))
+    wanted_handle = int(selector["handle"]) if selector.get("handle") else None
+    wanted_pid = selector.get("process_id", selector.get("pid"))
+    wanted_pid = int(wanted_pid) if wanted_pid is not None else None
+    wanted_name = str(selector.get("name") or "")
+    needle = str(selector.get("name_contains") or selector.get("app_name") or "").casefold()
+    windows = []
+
+    def add_window(hwnd: int, _unused) -> None:
+        if len(windows) >= limit or not win32gui.IsWindowVisible(hwnd):
+            return
+        if wanted_handle is not None and hwnd != wanted_handle:
+            return
+        title = win32gui.GetWindowText(hwnd)
+        if wanted_name and title != wanted_name:
+            return
+        if needle and needle not in title.casefold():
+            return
+        pid = win32process.GetWindowThreadProcessId(hwnd)[1]
+        if pid <= 0 or (wanted_pid is not None and pid != wanted_pid):
+            return
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        if right <= left or bottom <= top:
+            return
+        windows.append({
+            "name": title, "automation_id": "", "control_type": "Window",
+            "process_id": pid, "handle": int(hwnd),
+            "bounds": {"x": left, "y": top, "width": right - left, "height": bottom - top},
+            "value": None,
+        })
+
+    win32gui.EnumWindows(add_window, None)
+    return {"backend": "win32-top-level", "windows": windows, "count": len(windows)}
+
 def execute(payload):
     if not isinstance(payload, dict):
         raise ValueError("payload must be an object")
@@ -69,6 +112,15 @@ def execute(payload):
     }
     if action not in supported:
         raise ValueError(f"unsupported Windows UI action: {action}")
+    # UIA-only controls and all mutations still require the owner-supervised host.
+    # This read-only Win32 snapshot remains responsive when its Tk event loop is busy.
+    if action == "status":
+        return {"ok": True, "result": {"backend": "win32-top-level", "available": True,
+                                         "cached_windows": 0}}
+    if action == "list_windows" and not (_runtime() / "ui-stop-request.json").exists():
+        quick = _fast_windows(payload)
+        if quick is not None:
+            return {"ok": True, "result": quick}
     return _request({**payload, "action": action})
 
 

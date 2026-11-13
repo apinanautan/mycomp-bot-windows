@@ -1,3 +1,29 @@
+## Version 1.1.41 — Fast, owner-safe Windows window discovery
+
+- Windows list_windows now uses a live Win32 top-level window enumeration when only names, handles, PIDs and bounds are needed. It does not block on the desktop application's Tk event loop or a slow UI Automation desktop scan.
+- UIA-specific filters (automation_id, control_type) and detail=True still use the existing owner-supervised Windows UI Automation bridge. All clicks and changes retain the existing permission checks. The owner's stop flag remains effective for the native read path.
+- status returns a lightweight Win32 capability status without relying on the desktop UI polling loop.
+- Added 4 regression tests for native snapshot accuracy, handle selection, owner stop and unchanged UIA/GUI action routing.
+- Included the bounded one-call project diagnostic scripts/fast-check.ps1, with its separate smoke test and measured latency notes. This does not change the configured Tunnel ID, OAuth state, secrets or filesystem allowances.
+
+**Measured** before optimization on the loaded Windows host: a one-shot pywinauto/UIA list_windows took 28.5 seconds; an isolated native Win32 enumeration took 4.5 ms. These measurements omit the cost of the ChatGPT tool round trip. The native code path must still be measured end-to-end after deployment. Chrome dom_cdp.steps independently passed a 3-read batch through the existing Dino Tunnel. A separately named batch_execute tool may still need connector-tool schema refresh to appear in ChatGPT; local source code cannot force the App-backed tool catalog to update.
+
+## 2026-11-13 performance experiment — one-call read-only preflight (unreleased)
+
+**Measured on DESKTOP-F1PJT4S through ChatGPT → Dino Tunnel, identical 16 safe file-existence checks:**
+
+| Method | Wall clock | Successful checks | Workload speedup |
+| --- | ---: | ---: | ---: |
+| 16 separate Shell tool calls | 38.506 s | 16/16 | baseline |
+| One compound Shell call, median of 3 | 2.480 s | 16/16 | **15.5x** |
+| New scripts/fast-check.ps1, median of 3 | 3.590 s | 16/16 | **10.7x** |
+
+These are *observed tool wall-clock times*, not total model thinking time or guarantees for every task. The new read-only PowerShell script performs 16 source integrity checks and returns source version, missing count and Git cleanliness as compact JSON. Use -WithRuntime to include active MyComp versions and loopback Engine health. It never reads OAuth, API keys or other secret values.
+
+**Use the platform's supported batching before adding dependencies.** On the MCP side prefer batch_read (20 individually allowed-root checks), batch_execute (12 independently permission-checked actions) and existing DOM/UIA multi-step calls *where those tools are actually exposed*. If using the existing authorized Shell interface to group trusted read-only checks, the Shell's policy applies to the invocation; it is not a substitute for per-step permission checks for writes. Keep GUI mutations ordered, and verify post-state after errors.
+
+GitHub research: the [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) recommends stateless Streamable HTTP with JSON responses, which MyComp Bot already uses. [Microsoft UI Automation caching](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-cachingforclients) explains why bulk property access helps; [pywinauto](https://github.com/pywinauto/pywinauto) already powers the current bridge. [Playwright CDP attach](https://playwright.dev/python/docs/api/class-browsertype) could be evaluated separately, but it has fidelity trade-offs and is **not** installed by this experiment. The [uv project](https://github.com/astral-sh/uv) speeds up installing Python dependencies, not ChatGPT tool round trips; do not add it for runtime latency.
+
 ## Version 1.1.40 — Correct and observable Batch execution
 
 - `batch_execute` treats Accessibility `wait_until` as a read-only operation, matching the standalone tool permission. Every other batch step retains its independent permission check.

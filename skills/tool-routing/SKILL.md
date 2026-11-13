@@ -21,3 +21,13 @@ Transport latency is not model inference or code quality. Skill documents advise
 - Prefer Secure MCP Tunnel after a real authenticated ChatGPT tool call through that exact plugin. Local health and low latency are not sufficient evidence.
 - If the named Tunnel plugin is missing or blocked by account/workspace policy, retain the working Tailscale channel for independent tasks. Never label a Tailscale result as Tunnel success.
 - Recheck host identity whenever switching channels or machines. Read operator-clarity first.
+
+## Fast path for repeatable read-only work (2026-11-13)
+
+The ChatGPT-to-MCP round trip dominates trivial commands. Measured on DESKTOP-F1PJT4S: the same 16 project-file existence checks took 38.506 s across 16 Dino Tunnel shell calls, versus a median 2.480 s when combined into one read-only call (3 repeats, all 16 checks correct): **15.5x for this workload**, not a global 15.5x claim.
+
+1. Plan a bounded group of independent reads before the first tool call. Prefer the *actually exposed* batch_read (up to 20 allowed-root files), batch_execute (up to 12 individually permission-checked steps), dom_cdp.steps, or accessibility.steps if available in this ChatGPT session. Never assume a tool is exposed merely because its engine source defines it.
+2. When only an authorized Shell tool is exposed, combine **trusted, read-only checks** into one PowerShell invocation if they have no dependencies and reveal no secrets. An aggregate Shell call uses **Shell's policy**, not independent batch_execute per-step checks; do not use this shortcut to smuggle writes, admin commands, broad filesystem traversals, or GUI clicks.
+3. For routine MyComp Bot source checks, use powershell.exe -NoProfile -NonInteractive -File scripts/fast-check.ps1 from this repository. It checks 16 known files plus source version and Git cleanliness in one call, without reading credentials. Add -WithRuntime only when engine health and active process versions matter.
+4. Keep outputs compact (counts, changed state, errors and selected evidence); inspect detailed records only when necessary. Do not repeat stale results returned with status=skipped during overlapping calls. Never infer a latency benefit from a single run.
+5. Keep ordered UI mutations sequential, with observation/verification and per-step authorization. Batch related UI actions only through supported explicit tools and stop-on-error behavior. For any failure with ambiguous write completion, inspect post-state before retry.
