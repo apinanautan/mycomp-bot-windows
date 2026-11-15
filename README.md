@@ -1,3 +1,10 @@
+## Version 1.1.44 — Busy tools never show stale results
+
+- On an overlapping MCP call, ToolQueue returns status skipped with empty results and the new request ID. It never displays stdout or data belonging to the last completed call. This fixes a confusing case where ChatGPT requested a MyComp Bot diagnostic but saw old Blender results.
+- Existing single-flight safety, owner permissions, OAuth state, Tunnel ID, API keys, and protection against duplicate concurrent writes are unchanged.
+- Added a regression test for stale-result leakage. This is a correctness and reliability fix; it does not make a long-running render execute 10x faster.
+- Includes all upstream v1.1.43 startup auto-update and UIA recovery changes.
+
 ## Version 1.1.42 — Direct read-only UIA without GUI queue stalls
 
 - Read-only Accessibility inspection (observe, observe_summary, observe_changes, inspect_elements, find_element, wait_until) uses the installed pywinauto UI Automation bridge directly when a window handle is explicitly selected or a Win32 title lookup is unique. This avoids blocking on the MyComp Bot GUI's Tk event loop and skips desktop-wide scans for known handles.

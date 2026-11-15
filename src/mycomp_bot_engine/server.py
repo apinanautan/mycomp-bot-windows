@@ -301,6 +301,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
             return await resources.tool_queue.execute(
                 user, function.__name__,
                 lambda: asyncio.to_thread(function, **arguments),
+                request_id=arguments.get("request_id"),
             )
         return run
 

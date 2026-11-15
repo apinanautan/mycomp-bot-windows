@@ -33,7 +33,7 @@ class ToolQueueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await first)["results"], [42])
         self.assertFalse(q.is_running("alice", "api"))
 
-    async def test_latest_result_returned_during_subsequent_run(self):
+    async def test_no_stale_result_leaks_during_subsequent_run(self):
         q = ToolQueue()
         await q.execute("alice", "api", lambda: asyncio.sleep(0, {"status": "completed", "results": ["old"]}))
         entered, release = asyncio.Event(), asyncio.Event()
@@ -45,9 +45,12 @@ class ToolQueueTests(unittest.IsolatedAsyncioTestCase):
 
         task = asyncio.create_task(q.execute("alice", "api", slow))
         await entered.wait()
-        duplicate = await q.execute("alice", "api", slow)
+        duplicate = await q.execute("alice", "api", slow, request_id="new-request")
         self.assertEqual(duplicate["status"], "skipped")
-        self.assertEqual(duplicate["results"], ["old"])
+        self.assertEqual(duplicate["request_id"], "new-request")
+        self.assertEqual(duplicate["results"], [])
+        self.assertNotIn("old", str(duplicate))
+        self.assertIn("not executed", duplicate["warnings"][0])
         release.set()
         self.assertEqual((await task)["results"], ["new"])
 

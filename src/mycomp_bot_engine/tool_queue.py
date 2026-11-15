@@ -1,14 +1,13 @@
 """Single-flight queues scoped to an authenticated user and a canonical MCP tool.
 
-A duplicate request is skipped immediately; no runner is left waiting.  The most
-recent completed result for the queue is returned when one exists.  Underlying
-tool timeouts are unchanged and every completion/failure/cancellation releases
+A duplicate request is skipped immediately with no prior result attached.
+Never return a stale tool response as though it answered the new request.
+Underlying timeouts are unchanged and every completion/cancellation releases
 the running slot.
 """
 from __future__ import annotations
 
 import asyncio
-import copy
 import threading
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -33,7 +32,6 @@ class ToolQueue:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._running: set[tuple[str, str]] = set()
-        self._latest: dict[tuple[str, str], Any] = {}
 
     def is_running(self, user: str, tool: str) -> bool:
         key = (user, normalize_tool_name(tool))
@@ -45,21 +43,19 @@ class ToolQueue:
         user: str,
         tool: str,
         runner: Callable[[], Awaitable[Any]],
+        *,
+        request_id: str | None = None,
     ) -> Any:
         key = (str(user) or "owner", normalize_tool_name(tool))
         with self._lock:
             if key in self._running:
-                recent = copy.deepcopy(self._latest.get(key))
-                if isinstance(recent, dict):
-                    return {
-                        **recent,
-                        "status": "skipped",
-                        "changed": False,
-                        "warnings": [*(recent.get("warnings") or []), "A call to this tool is already running for this user; latest completed result returned."],
-                    }
                 return {
-                    "status": "skipped", "changed": False, "results": [],
-                    "warnings": ["A call to this tool is already running for this user; no previous result is available."],
+                    "status": "skipped", "request_id": request_id,
+                    "changed": False, "results": [],
+                    "warnings": [
+                        "This request was not executed: another call to this tool "
+                        "is still running for this user. No prior result was returned."
+                    ],
                 }
             self._running.add(key)
         # Shield the underlying tool: a client disconnect/cancellation must not
@@ -72,13 +68,7 @@ class ToolQueue:
             raise
 
         def completed(done: asyncio.Task[Any]) -> None:
-            try:
-                value = done.result()
-            except BaseException:
-                value = None
             with self._lock:
-                if value is not None:
-                    self._latest[key] = copy.deepcopy(value)
                 self._running.discard(key)
 
         task.add_done_callback(completed)
