@@ -29,6 +29,7 @@ class BrowserCdpWindowsTests(unittest.TestCase):
 
     def test_existing_tab_is_reused_for_sequential_work(self):
         with patch.object(cdp, "_port", return_value=9273), \
+                patch.object(cdp, "_port_is_busy", return_value=True), \
                 patch.object(cdp, "_tab", return_value={"id": "task-tab", "url": "about:blank"}), \
                 patch.object(cdp, "_with_tab", return_value={"frameId": "ok"}) as navigate, \
                 patch.object(cdp, "_json_request") as new_tab:

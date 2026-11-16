@@ -323,6 +323,12 @@ def execute(payload):
     action = str(payload.get("action", "status"))
     port = _port(payload)
 
+    if action not in {"launch", "status"} and not _port_is_busy(port):
+        # Dedicated Chrome is not running yet: start it instead of failing.
+        launch = {key: value for key, value in payload.items() if key in {"port", "display", "profile"}}
+        port = execute({**launch, "action": "launch"})["port"]
+        payload = {**payload, "port": port}
+
     if action == "launch":
         session = _workspace_session()
         if _port_is_busy(port):

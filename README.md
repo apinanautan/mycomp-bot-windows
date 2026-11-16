@@ -1,3 +1,7 @@
+## Version 1.1.47 — Chrome CDP starts by itself
+
+MyComp Bot now opens (or reuses) its own dedicated CDP Chrome when the app starts, and any browser tool other than `status` launches it automatically if it is not running, instead of failing. The user's normal Chrome is never taken over. Disable with `MYCOMP_BROWSER_CDP_ENABLED=false`.
+
 ## Version 1.1.46 — Tunnel restarts cleanly after updates
 
 Before starting, MyComp Bot now stops any orphaned copy of its own `tunnel-client.exe` (matched by exact path), so after an update ChatGPT can never reach a stale runtime that lacks the channel header. No manual restart or Task Manager step is needed.

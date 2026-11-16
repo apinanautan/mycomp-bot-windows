@@ -171,6 +171,18 @@ def _set_autostart(enabled: bool) -> None:
                 pass
 
 
+def _autostart_browser_cdp() -> None:
+    """Open (or reuse) MyComp Bot's own CDP Chrome at startup so browser tools work immediately."""
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("mycomp_cdp_autostart", ROOT / "capability_sources" / "browser_cdp.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.execute({"action": "launch"})
+    except Exception:
+        pass  # browser tools still auto-launch on first use
+
+
 def _read_env() -> dict[str, str]:
     values: dict[str, str] = {}
     try:
@@ -1006,7 +1018,9 @@ class MyCompBot(tk.Tk):
         self.automation = WindowsUIAutomation()
         self.automation.preload()
         values = {**_defaults(), **_read_env()}
-        self.owner_consent_token = values["MYCOMP_OWNER_CONSENT_TOKEN"] or secrets.token_urlsafe(32)
+        if values.get("MYCOMP_BROWSER_CDP_ENABLED", "true").lower() in {"1", "true", "yes", "on"}:
+            threading.Thread(target=_autostart_browser_cdp, daemon=True, name="cdp-autostart").start()
+        self.owner_consent_token =values["MYCOMP_OWNER_CONSENT_TOKEN"] or secrets.token_urlsafe(32)
         self.remote_commander_autostart_enabled = (
             values["MYCOMP_REMOTE_DESKTOP_COMMANDER_AUTOSTART"].lower() in {"1", "true", "yes", "on"}
         )
