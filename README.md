@@ -1,3 +1,8 @@
+## Version 1.1.56 — Skills update themselves
+
+- Every ChatGPT that connects now receives MCP instructions with this install's skill set version and skill list.
+- ChatGPT compares them with its installed skills and, if any are missing or older, installs/updates only those from the matching release tag, without asking. Staff no longer need to copy/paste the setup prompt after an update.
+
 ## Version 1.1.55 — Full test with auto-repair
 
 - The setup prompt ends with a full test of every tool group (filesystem, shell, batch_execute, dom_cdp, HTTPS api, codex-luna) reported as PASS/FAIL.
