@@ -154,7 +154,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
     auth_options: dict[str, Any] = {}
     if settings.require_auth:
         auth_options = {
-            "token_verifier": SQLiteTokenVerifier(oauth),
+            "token_verifier": SQLiteTokenVerifier(oauth, settings.data_dir / "openai-tunnel" / "channel-bearer", level_scope(settings.permission_level)),
             "auth": AuthSettings(
                 issuer_url=AnyHttpUrl(settings.public_base_url),
                 resource_server_url=AnyHttpUrl(settings.public_mcp_endpoint),

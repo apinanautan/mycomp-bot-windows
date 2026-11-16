@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import socket
 import subprocess
 import time
@@ -337,6 +338,14 @@ STEP 5 — ตรวจรับและรายงานตรงตามจ
         validate(config["tunnel_id"], key)
         self.health.unlink(missing_ok=True)
         environment = {**os.environ, "CONTROL_PLANE_API_KEY": key}
+        # Channel-only auth: tunnel-client presents a local secret to the loopback
+        # engine, so ChatGPT connects through the Tunnel without OAuth/Tailscale.
+        bearer = self.directory / "channel-bearer"
+        if not bearer.is_file() or len(bearer.read_text(encoding="utf-8").strip()) < 32:
+            bearer.write_text(secrets.token_urlsafe(48), encoding="utf-8")
+        environment["MYCOMP_CHANNEL_AUTH"] = "Bearer " + bearer.read_text(encoding="utf-8").strip()
+        channel_header = ["--mcp.extra-headers", "Authorization: env:MYCOMP_CHANNEL_AUTH",
+                          "--mcp.discovery-extra-headers", "Authorization: env:MYCOMP_CHANNEL_AUTH"]
         # The local MCP origin and the public OAuth authorization-server origin
         # differ. Current tunnel-client versions deny cross-origin discovery
         # unless the exact HTTPS origin was explicitly configured by this app.
@@ -355,7 +364,7 @@ STEP 5 — ตรวจรับและรายงานตรงตามจ
             self.process = subprocess.Popen([str(self.binary), "run",
                 "--control-plane.tunnel-id", config["tunnel_id"],
                 "--control-plane.api-key", "env:CONTROL_PLANE_API_KEY",
-                "--mcp.server-url", self.mcp_endpoint,
+                "--mcp.server-url", self.mcp_endpoint, *channel_header,
                 "--health.listen-addr", "127.0.0.1:0",
                 "--health.url-file", str(self.health)],
                 env=environment, stdout=self.log, stderr=subprocess.STDOUT,

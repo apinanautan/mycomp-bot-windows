@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import secrets
 import sqlite3
 import time
@@ -304,10 +305,26 @@ class OAuthService:
 class SQLiteTokenVerifier:
     """FastMCP TokenVerifier adapter; imports SDK types only when the engine runs."""
 
-    def __init__(self, service: OAuthService) -> None:
+    def __init__(self, service: OAuthService, channel_bearer=None, channel_scope: str | None = None) -> None:
         self.service = service
+        # Secret shared only with the local OpenAI tunnel-client (sent as a static header).
+        self.channel_bearer = channel_bearer
+        self.channel_scope = channel_scope
+
+    def _is_channel_token(self, token: str) -> bool:
+        if not self.channel_bearer or not self.channel_scope:
+            return False
+        try:
+            secret = self.channel_bearer.read_text(encoding="utf-8").strip()
+        except OSError:
+            return False
+        return len(secret) >= 32 and hmac.compare_digest(secret, token)
 
     async def verify_token(self, token: str):
+        if self._is_channel_token(token):
+            from mcp.server.auth.provider import AccessToken
+
+            return AccessToken(token=token, client_id="openai-tunnel", scopes=["mycomp", self.channel_scope], resource=self.service.resource_server_url)
         scopes = self.service.access_token_scopes(token)
         if scopes is None:
             return None

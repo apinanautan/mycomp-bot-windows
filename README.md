@@ -1,3 +1,7 @@
+## Version 1.1.45 — Channel-only connection without Tailscale
+
+The OpenAI Tunnel now authenticates to the loopback engine with a locally generated secret sent as a static tunnel-client header, so a ChatGPT connector over the Tunnel can use **No Auth** and connect directly, without Tailscale or an OAuth popup. The secret lives in `%LOCALAPPDATA%\MyComp Bot\openai-tunnel\channel-bearer`, grants the owner-selected permission level, and local processes without it are still rejected. Tailscale + OAuth keeps working unchanged.
+
 ## Version 1.1.44 — Busy tools never show stale results
 
 - On an overlapping MCP call, ToolQueue returns status skipped with empty results and the new request ID. It never displays stdout or data belonging to the last completed call. This fixes a confusing case where ChatGPT requested a MyComp Bot diagnostic but saw old Blender results.
