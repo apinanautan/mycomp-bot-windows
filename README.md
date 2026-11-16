@@ -1,3 +1,8 @@
+## Version 1.1.55 — Full test with auto-repair
+
+- The setup prompt ends with a full test of every tool group (filesystem, shell, batch_execute, dom_cdp, HTTPS api, codex-luna) reported as PASS/FAIL.
+- Failures are repaired automatically (e.g. relaunch CDP Chrome, re-login Codex, reinstall skills) and retested up to 2 times, then reported with what was fixed and what still fails.
+
 ## Version 1.1.54 — Prompt skips what is already done
 
 - The setup prompt now checks first and skips anything already installed and up to date (skills, Codex login, remembered email); it only does what is new or changed.

@@ -99,6 +99,10 @@ class TunnelTests(unittest.TestCase):
             self.assertIn("tidmunzsocial-lab/tidmunz-studio", prompt)
             self.assertIn("catalog.json", prompt)
             self.assertIn("ทำเฉพาะของใหม่", prompt)
+            self.assertIn("Full test", prompt)
+            self.assertIn("dom_cdp action launch", prompt)
+            self.assertLess(prompt.index("Full test"), prompt.index("dom_cdp action launch"))
+            self.assertLess(prompt.index("อัปเดตสกิล Tidmunz"), prompt.index("Full test"))
             self.assertNotIn(chr(92) + "n", prompt)
             self.assertNotIn("sk-", prompt)
 
