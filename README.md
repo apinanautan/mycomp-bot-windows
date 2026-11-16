@@ -1,3 +1,7 @@
+## Version 1.1.48 — agent-desktop skill removed
+
+The `agent-desktop-portable` skill is removed from the bundle, AGENTS.md and the plugin setup prompt. The prompt now tells the assistant to delete an existing copy and not to install agent-desktop. GUI work uses Windows UI tools or Remote Desktop Commander.
+
 ## Version 1.1.47 — Chrome CDP starts by itself
 
 MyComp Bot now opens (or reuses) its own dedicated CDP Chrome when the app starts, and any browser tool other than `status` launches it automatically if it is not running, instead of failing. The user's normal Chrome is never taken over. Disable with `MYCOMP_BROWSER_CDP_ENABLED=false`.

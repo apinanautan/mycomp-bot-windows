@@ -25,11 +25,11 @@ class BundledSkillTests(unittest.TestCase):
         self.assertIn("DietrichGebert", (ROOT / "skills/README.md").read_text(encoding="utf-8"))
 
     def test_portable_route_and_recovery_skills(self):
-        for name in ("tool-routing", "connection-recovery", "agent-desktop-portable"):
+        for name in ("tool-routing", "connection-recovery"):
             with self.subTest(name=name):
                 text = (ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
                 self.assertTrue(text.startswith("---\nname: " + name))
-                self.assertIn("Remote Desktop Commander" if name != "agent-desktop-portable" else "agent-desktop", text)
+                self.assertIn("Remote Desktop Commander", text)
         routing = (ROOT / "skills/tool-routing/SKILL.md").read_text(encoding="utf-8")
         self.assertIn("median", routing)
         self.assertIn("task type", routing)

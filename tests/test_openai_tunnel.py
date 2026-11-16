@@ -125,7 +125,7 @@ class TunnelTests(unittest.TestCase):
             self.assertIn("User Named Bot Tunnel", prompt)
             self.assertIn("skills/operator-clarity/SKILL.md", prompt)
             for name in ("development-loop", "ponytail", "tool-routing",
-                         "connection-recovery", "agent-desktop-portable"):
+                         "connection-recovery"):
                 self.assertIn(name, prompt)
             self.assertIn("Remote Desktop Commander", prompt)
             self.assertIn("dom_cdp.launch", prompt)

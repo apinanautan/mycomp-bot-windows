@@ -5,7 +5,7 @@ description: Diagnose and safely recover MyComp Bot's Tailscale, OpenAI Tunnel a
 
 # MyComp Bot self-improving connection recovery
 
-Use with development-loop, ponytail, tool-routing, and agent-desktop-portable. This skill is a procedure, not autonomous network access.
+Use with development-loop, ponytail, and tool-routing. This skill is a procedure, not autonomous network access.
 
 ## Detect and recover
 1. Inventory this device's three routes: Tailscale HTTPS MCP, OpenAI Secure MCP Tunnel, Remote Desktop Commander. Discover tools, account scope, endpoint identity, credential readiness and permission policy. Mark absent, unsupported, unhealthy and verified-working separately.

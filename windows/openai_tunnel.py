@@ -272,8 +272,8 @@ STEP 3 — หน้าจอเดียวแบ่งครึ่ง ChatGPT 
 5. ห้ามใช้ webbrowser.open, Start-Process URL, os.startfile, cmd start หรือเบราว์เซอร์เริ่มต้นสำหรับเปิดลิงก์งาน เพราะจะรบกวนแชทเดิม
 
 STEP 4 — ส่วนที่เหลือของ MyComp Bot
-1. ตรวจ Remote Desktop Commander/agent-desktop, Windows Accessibility, keyboard, mouse, vision และ Chrome CDP ด้วยคำสั่งจริง โดยไม่แตะบริการ Studio ที่ไม่เกี่ยวข้อง
-2. ตรวจ Skills (รวม operator-clarity, development-loop, ponytail, tool-routing, connection-recovery, agent-desktop-portable), ไอคอน MyComp Bot และระบบเริ่มพร้อม Windows; สร้างหรือปรับเฉพาะรายการที่ยังขาด ใช้ชื่อหลัก {name} อย่างสม่ำเสมอ
+1. ตรวจ Remote Desktop Commander, Windows Accessibility, keyboard, mouse, vision และ Chrome CDP ด้วยคำสั่งจริง โดยไม่แตะบริการ Studio ที่ไม่เกี่ยวข้อง
+2. ตรวจ Skills (รวม operator-clarity, development-loop, ponytail, tool-routing, connection-recovery), ไอคอน MyComp Bot และระบบเริ่มพร้อม Windows; สร้างหรือปรับเฉพาะรายการที่ยังขาด ใช้ชื่อหลัก {name} อย่างสม่ำเสมอ ถ้ามี skill agent-desktop-portable อยู่แล้วให้ลบออก ไม่ต้องติดตั้ง agent-desktop
 3. ห้ามเปลี่ยนชื่อปลั๊กอินหรือแอปที่ไม่เกี่ยวข้อง ห้ามเปิดลิงก์บนหน้าต่าง ChatGPT ที่ผู้ใช้อ่านอยู่
 
 STEP 5 — ตรวจรับและรายงานตรงตามจริง
