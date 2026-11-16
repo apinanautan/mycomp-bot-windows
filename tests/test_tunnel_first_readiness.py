@@ -7,43 +7,6 @@ from windows.openai_tunnel import Tunnel
 
 
 class TunnelFirstReadinessTests(unittest.TestCase):
-    def test_setup_prompt_is_tunnel_first_and_resumable(self):
-        with tempfile.TemporaryDirectory() as directory:
-            tunnel = Tunnel(Path(directory))
-            prompt = tunnel.plugin_prompt('Dino', 'https://example.ts.net/mycomp')
-            for text in ('Tunnel/main', 'STEP 0', 'STATE.md', 'tools/list', 'Chrome'):
-                self.assertIn(text, prompt)
-            self.assertNotIn('sk-SECRET', prompt)
-
-    def test_prompt_reuses_saved_tunnel_and_skips_completed_setup(self):
-        with tempfile.TemporaryDirectory() as directory:
-            tunnel = Tunnel(Path(directory))
-            prompt = tunnel.plugin_prompt("MyComp Bot", "https://example.ts.net/mycomp")
-            assert "MyComp Bot Tailscale" in prompt
-            assert "MyComp Bot Tunnel" in prompt
-            for phrase in ("key.dpapi", "ห้ามสร้าง Tunnel, Channel, Key", "เสร็จแล้ว/ข้าม",
-                           "ซ่อมเฉพาะจุดเดิม", "ChatGPT ซ้าย", "Chrome ทำงานขวา",
-                           "Orchestrator"):
-                self.assertIn(phrase, prompt)
-            self.assertLess(prompt.index("STEP 1"), prompt.index("STEP 2"))
-
-    def test_prompt_continues_independent_work_when_chatgpt_mcp_blocked(self):
-        with tempfile.TemporaryDirectory() as directory:
-            tunnel = Tunnel(Path(directory))
-            prompt = tunnel.plugin_prompt("MyComp BotS", "https://example.ts.net/mycomp")
-            for phrase in ("blocked_permission", "mycomp-operator", "ข้ามเฉพาะการผูก Tunnel",
-                           "ผ่าน Tailscale", "MyComp BotS Tunnel", "MyComp BotS Tailscale"):
-                self.assertIn(phrase, prompt)
-            self.assertNotIn("ไม่ข้ามไปทำงานอื่นก่อน Tunnel สำเร็จ", prompt)
-
-    def test_prompt_distinguishes_private_plugin_package_from_installed_plugin(self):
-        with tempfile.TemporaryDirectory() as directory:
-            tunnel = Tunnel(Path(directory))
-            prompt = tunnel.plugin_prompt("MyComp Bot", "https://example.ts.net/mycomp")
-            self.assertIn("Plugin Creator", prompt)
-            self.assertIn("Installed Plugins", prompt)
-            self.assertIn("Private Plugin", prompt)
-
     def test_status_distinguishes_auth_required_from_authenticated(self):
         with tempfile.TemporaryDirectory() as directory:
             tunnel = Tunnel(Path(directory))

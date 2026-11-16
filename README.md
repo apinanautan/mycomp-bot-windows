@@ -1,3 +1,8 @@
+## Version 1.1.51 — Skills-only setup prompt
+
+- The copy-prompt button now only installs the fast-batch, mycomp-operator and development-loop skills and runs one quick batch test.
+- Removed the Tailscale, OpenAI Tunnel and Remote Desktop setup instructions from the prompt.
+
 ## Version 1.1.50 — Quiet Chrome, clearer batch, Windows TLS
 
 - The worker CDP Chrome now starts minimized, so it no longer pops over the screen (pass `background:false` to `dom_cdp` launch to show it).
