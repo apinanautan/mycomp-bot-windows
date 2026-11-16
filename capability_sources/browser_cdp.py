@@ -356,6 +356,9 @@ def execute(payload):
         arguments = ["--remote-debugging-address=127.0.0.1", f"--remote-debugging-port={port}",
                      f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
                      "--new-window", *_window_arguments(display), url]
+        if payload.get("background", True):
+            # Default: start minimized so the worker Chrome never pops over the user's screen.
+            arguments.insert(-1, "--start-minimized")
         if os.name == "nt":
             candidates = [
                 Path(os.environ.get("PROGRAMFILES", "C:/Program Files")) / "Google/Chrome/Application/chrome.exe",

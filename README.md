@@ -1,3 +1,9 @@
+## Version 1.1.50 — Quiet Chrome, clearer batch, Windows TLS
+
+- The worker CDP Chrome now starts minimized, so it no longer pops over the screen (pass `background:false` to `dom_cdp` launch to show it).
+- `batch_execute` documents a flat step format with examples, and errors list the valid kinds/operations/actions, so ChatGPT gets the format right first time.
+- The `api` tool verifies HTTPS with the Windows trust store (`truststore`), fixing certificate failures on machines with corporate/antivirus roots or missing intermediates.
+
 ## Version 1.1.49 — Leaner, faster skill set
 
 Skills cut from 5 (~2,700 words) to 3 (~1,000 words). New **fast-batch** teaches ChatGPT to plan first and do more per tool call (batch_read, batch_execute, dom_cdp/accessibility steps), since each ChatGPT round trip is far slower than the PC. **mycomp-operator** merges operator-clarity, tool-routing and connection-recovery. ponytail is removed. The setup prompt now asks to delete retired skills from plugins.

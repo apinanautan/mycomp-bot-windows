@@ -360,7 +360,10 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
         except Exception as error:
             return failed(error, request_id=request_id, started=started, backend="batch_read")
 
-    @mcp.tool(description="Execute 1 to 12 explicit Shell, filesystem, accessibility, dom_cdp or vision steps in one MCP call. Each step independently checks the same permission policy, allowed paths and executable restrictions as the individual tools. Runs sequentially to preserve order and returns per-step results; no arbitrary nested tool calls. Prefer this over several separate calls: every avoided round trip is dead time.")
+    @mcp.tool(description="Execute 1 to 12 explicit Shell, filesystem, accessibility, dom_cdp or vision steps in one MCP call. Each step independently checks the same permission policy, allowed paths and executable restrictions as the individual tools. Runs sequentially to preserve order and returns per-step results; no arbitrary nested tool calls. Prefer this over several separate calls: every avoided round trip is dead time. Every step is a flat object with a 'kind' key. Examples: "
+                        '{"kind":"shell","executable":"C:\\\\Windows\\\\System32\\\\cmd.exe","arguments":["/c","ver"]}; '
+                        '{"kind":"filesystem","operation":"list","path":"C:\\\\Users"} (operations: list, read, read_many, stat, stat_many, search, search_text, write, patch, patch_many); '
+                        '{"kind":"accessibility","action":"list_windows"}; {"kind":"dom_cdp","action":"status"}; {"kind":"vision","action":"screenshot"}.')
     @threaded
     def batch_execute(
         steps: list[dict[str, Any]], stop_on_error: bool = False,
@@ -422,7 +425,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
                         operation = step.get("operation")
                         allowed = {"list", "read", "read_many", "stat", "stat_many", "search", "search_text", "write", "patch", "patch_many"}
                         if operation not in allowed:
-                            raise ValueError("unsupported filesystem operation")
+                            raise ValueError("filesystem operation must be one of: " + ", ".join(sorted(allowed)))
                         write = operation in {"write", "patch", "patch_many"}
                         policy.require("elevated" if write else "normal", "batch_execute.filesystem." + operation)
                         path = step.get("path", ".")
@@ -459,7 +462,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
                     elif kind == "accessibility":
                         step_action = str(step.get("action", ""))
                         if step_action not in AccessibilityAction.__args__:
-                            raise ValueError("unsupported accessibility action")
+                            raise ValueError("accessibility action must be one of: " + ", ".join(AccessibilityAction.__args__))
                         read_only = {"status", "list_windows", "observe", "observe_summary", "observe_changes", "inspect_elements", "find_element", "wait_until"}
                         policy.require("normal" if step_action in read_only else "elevated", "batch_execute.accessibility." + step_action)
                         payload = {key: value for key, value in step.items() if key not in {"kind", "action", "execution", "privilege"}}
@@ -477,7 +480,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
                     elif kind == "dom_cdp":
                         step_action = str(step.get("action", ""))
                         if step_action not in DomAction.__args__:
-                            raise ValueError("unsupported DOM/CDP action")
+                            raise ValueError("dom_cdp action must be one of: " + ", ".join(DomAction.__args__))
                         read_only = {"status", "list_tabs", "query", "wait", "screenshot"}
                         policy.require("normal" if step_action in read_only else "elevated", "batch_execute.dom_cdp." + step_action)
                         payload = {key: value for key, value in step.items() if key not in {"kind", "action", "execution", "privilege"}}
@@ -492,7 +495,7 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
                     elif kind == "vision":
                         step_action = str(step.get("action", ""))
                         if step_action not in VisionAction.__args__:
-                            raise ValueError("unsupported vision action")
+                            raise ValueError("vision action must be one of: " + ", ".join(VisionAction.__args__))
                         policy.require("normal", "batch_execute.vision." + step_action)
                         payload = {key: value for key, value in step.items() if key not in {"kind", "action", "execution", "privilege"}}
                         payload["timeout_seconds"] = float(step.get("timeout_seconds", 30))
@@ -504,7 +507,8 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
                             "duration_ms": int((time.monotonic() - step_started) * 1000),
                         })
                     else:
-                        raise ValueError("kind must be shell, filesystem, accessibility, dom_cdp or vision")
+                        raise ValueError('each step needs "kind": shell, filesystem, accessibility, dom_cdp or vision, '
+                                         'e.g. {"kind":"filesystem","operation":"list","path":"."}')
                 except Exception as error:
                     results.append({
                         "index": index, "kind": kind, "ok": False,
@@ -582,7 +586,15 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
                 return envelope(request_id=request_id, results=[{"dry_run": True, "request": preview}], started=started)
             timeout = min(max(float(timeout_seconds), 0.1), 120)
             limit = min(max(int(max_response_bytes), 0), 10_000_000)
-            opener = urllib.request.build_opener(NoRedirect())
+            try:
+                # Verify TLS with the Windows/OS trust store (handles corporate/AV roots
+                # and missing intermediates that bundled OpenSSL roots reject).
+                import ssl
+                import truststore
+                tls = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            except ImportError:
+                tls = None
+            opener = urllib.request.build_opener(NoRedirect(), urllib.request.HTTPSHandler(context=tls))
             response = None
             for _ in range(6):
                 request = urllib.request.Request(target, data=payload, headers=request_headers, method=method)
