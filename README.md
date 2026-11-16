@@ -1,3 +1,7 @@
+## Version 1.1.54 — Prompt skips what is already done
+
+- The setup prompt now checks first and skips anything already installed and up to date (skills, Codex login, remembered email); it only does what is new or changed.
+
 ## Version 1.1.53 — Codex CLI + Luna helper skill
 
 - New codex-luna skill: ChatGPT can hand multi-step work to the local Codex CLI (gpt-6-luna) and run up to 3 jobs in parallel (measured ~8 s per short job, ~10 s for three at once).

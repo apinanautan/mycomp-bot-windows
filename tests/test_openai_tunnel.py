@@ -98,6 +98,7 @@ class TunnelTests(unittest.TestCase):
             self.assertIn("batch_execute", prompt)
             self.assertIn("tidmunzsocial-lab/tidmunz-studio", prompt)
             self.assertIn("catalog.json", prompt)
+            self.assertIn("ทำเฉพาะของใหม่", prompt)
             self.assertNotIn(chr(92) + "n", prompt)
             self.assertNotIn("sk-", prompt)
 
