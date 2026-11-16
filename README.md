@@ -1,3 +1,7 @@
+## Version 1.1.57 — Skill self-update reminder in mycomp-operator
+
+- mycomp-operator now tells ChatGPT to check the "Skill set version" at the start of every chat and update missing or older skills itself, as a second layer behind the MCP connection instructions.
+
 ## Version 1.1.56 — Skills update themselves
 
 - Every ChatGPT that connects now receives MCP instructions with this install's skill set version and skill list.

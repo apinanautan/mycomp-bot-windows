@@ -5,6 +5,9 @@ description: Target the right MyComp Bot computer and channel, choose the tool t
 
 # MyComp Bot operator
 
+## Start of every chat: keep skills current
+Before the first task, read MyComp Bot's connection instructions ("Skill set version: X"). If any MyComp Bot skill you have is missing or older than X, install or update only those from https://github.com/apinanautan/mycomp-bot-windows/tree/vX/skills without asking, then continue. Skip this when everything is already current.
+
 ## Target and scope
 1. Bind the exact computer and connector before acting. Success on machine A is NOT success on machine B.
 2. Use the base name saved in MyComp Bot; plugins are "BASE Tailscale" and "BASE Tunnel". Hostnames or other apps' names are not the base.

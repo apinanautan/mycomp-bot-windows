@@ -31,7 +31,7 @@ class BundledSkillTests(unittest.TestCase):
         self.assertTrue(doc.startswith("---\nname: mycomp-operator\n"))
         for word in ("machine A", "machine B", "Tidmunz Studio", "Tailscale", "Tunnel",
                      "Remote Desktop Commander", "tools/list", "blocked_permission",
-                     "PLAYBOOK.md", "independent work"):
+                     "PLAYBOOK.md", "independent work", "Skill set version"):
             with self.subTest(word=word):
                 self.assertIn(word, doc)
         self.assertTrue((ROOT / "skills/mycomp-operator/PLAYBOOK.md").is_file())
