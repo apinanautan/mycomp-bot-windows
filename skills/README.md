@@ -1,17 +1,11 @@
 # MyComp Bot portable skills
 
-The single source of truth for all MyComp Bot plugin copies is this GitHub repository. Add the same five skill files to every owned/editable MyComp transport plugin: Tailscale, Tunnel, and Remote Desktop Commander.
+The single source of truth for all MyComp Bot plugin copies is this GitHub repository. Add the same three skills to every owned/editable MyComp transport plugin: Tailscale, Tunnel, and Remote Desktop Commander.
 
+- mycomp-operator: exact machine, plugin names, scope and channel; diagnose and recover Tailscale, Tunnel and Remote Desktop Commander; record verified repairs in PLAYBOOK.md.
+- fast-batch: plan first and do more per tool call, because each ChatGPT round trip is far slower than the PC.
 - development-loop: inspect, edit minimally, test, review, and record outcome.
-- ponytail: prefer the simplest correct complete implementation.
-- connection-recovery: verify a failing route, repair safely, record reusable evidence in PLAYBOOK.md.
-- tool-routing: choose the fastest eligible and healthy tool for each type of work, based on observed successful calls, not a permanent rank.
-- operator-clarity: preserve exact machine, plugin names, scope and evidence; skip completed work and continue independent tasks when a connector is blocked.
 
-Copy support files: ponytail/LICENSE and connection-recovery/PLAYBOOK.md. Do not blindly run any third-party installer or lifecycle hook.
+Copy the support file mycomp-operator/PLAYBOOK.md. Remove the retired skills operator-clarity, tool-routing, connection-recovery, ponytail and agent-desktop-portable from plugins. Do not blindly run any third-party installer or lifecycle hook.
 
-Ponytail is copied verbatim from https://github.com/DietrichGebert/ponytail at commit 96608e078b2d5ea607c5c3b8b5a54d1c1fba6846 and retains its MIT license.
-
-These are instructions, not access credentials. An unavailable or unowned plugin cannot be magically repaired or updated merely by copying skills. Never invent a Tunnel or Desktop plugin. Preserve app bindings and auth; do not replicate runtime secrets in a plugin archive.
-
-To improve a skill, first verify a real diagnostic/repair and test; record a short anonymized case, update this canonical source, then propagate only to owned editable plugin releases with explicit authority. Do not create separate self-learning mechanisms in the three plugins.
+These are instructions, not access credentials. An unavailable or unowned plugin cannot be repaired or updated merely by copying skills. Never invent a Tunnel or Desktop plugin. Preserve app bindings and auth; do not replicate runtime secrets in a plugin archive.

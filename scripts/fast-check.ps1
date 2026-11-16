@@ -9,7 +9,7 @@ $required = @(
     'capability_sources/browser_cdp.py', 'capability_sources/windows_ui.py',
     'scripts/benchmark.py', 'scripts/package-app.sh',
     'scripts/prepare-icon.py', 'scripts/win/_bridge.py',
-    'skills/README.md', 'skills/tool-routing/SKILL.md',
+    'skills/README.md', 'skills/fast-batch/SKILL.md',
     'src/mycomp_bot_engine/server.py', 'windows/UIAutomationBridge.py'
 )
 

@@ -15,48 +15,32 @@ class BundledSkillTests(unittest.TestCase):
             with self.subTest(term=term):
                 self.assertIn(term, text)
 
-    def test_ponytail_retains_upstream_license(self):
-        text = (ROOT / "skills/ponytail/SKILL.md").read_text(encoding="utf-8")
-        license_text = (ROOT / "skills/ponytail/LICENSE").read_text(encoding="utf-8")
-        self.assertIn("name: ponytail", text)
-        self.assertIn("MIT", text)
-        self.assertIn("MIT License", license_text)
-        self.assertIn("Copyright (c) 2026", license_text)
-        self.assertIn("DietrichGebert", (ROOT / "skills/README.md").read_text(encoding="utf-8"))
+    def test_only_current_skills_are_bundled(self):
+        names = sorted(item.name for item in (ROOT / "skills").iterdir() if item.is_dir())
+        self.assertEqual(names, ["development-loop", "fast-batch", "mycomp-operator"])
 
-    def test_portable_route_and_recovery_skills(self):
-        for name in ("tool-routing", "connection-recovery"):
-            with self.subTest(name=name):
-                text = (ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
-                self.assertTrue(text.startswith("---\nname: " + name))
-                self.assertIn("Remote Desktop Commander", text)
-        routing = (ROOT / "skills/tool-routing/SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("median", routing)
-        self.assertIn("task type", routing)
-        self.assertIn("post-state", routing)
-        recovery = (ROOT / "skills/connection-recovery/SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("PLAYBOOK.md", recovery)
-        self.assertIn("explicit approval", recovery)
-        self.assertIn("tools/list", recovery)
-        self.assertTrue((ROOT / "skills/connection-recovery/PLAYBOOK.md").is_file())
+    def test_fast_batch_teaches_fewer_calls(self):
+        text = (ROOT / "skills/fast-batch/SKILL.md").read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("---\nname: fast-batch\n"))
+        for term in ("batch_read", "batch_execute", "steps", "post-state"):
+            with self.subTest(term=term):
+                self.assertIn(term, text)
 
-    def test_operator_clarity_skill_prevents_target_and_entitlement_confusion(self):
-        doc = (ROOT / "skills/operator-clarity/SKILL.md").read_text(encoding="utf-8")
-        self.assertTrue(doc.startswith("---\nname: operator-clarity\n"))
-        for word in ("machine A", "machine B", "Tidmunz Studio", "Tailscale",
-                     "authenticated ChatGPT tools/list", "blocked_permission",
-                     "continue independent", "scope"):
+    def test_operator_skill_covers_target_channels_and_recovery(self):
+        doc = (ROOT / "skills/mycomp-operator/SKILL.md").read_text(encoding="utf-8")
+        self.assertTrue(doc.startswith("---\nname: mycomp-operator\n"))
+        for word in ("machine A", "machine B", "Tidmunz Studio", "Tailscale", "Tunnel",
+                     "Remote Desktop Commander", "tools/list", "blocked_permission",
+                     "PLAYBOOK.md", "independent work"):
             with self.subTest(word=word):
                 self.assertIn(word, doc)
-        self.assertIn("operator-clarity", (ROOT / "skills/README.md").read_text(encoding="utf-8"))
-        self.assertIn("operator-clarity", (ROOT / "AGENTS.md").read_text(encoding="utf-8"))
+        self.assertTrue((ROOT / "skills/mycomp-operator/PLAYBOOK.md").is_file())
 
-    def test_repo_instructions_reference_both(self):
+    def test_repo_instructions_reference_current_skills(self):
         text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-        self.assertIn("skills/development-loop/SKILL.md", text)
-        self.assertIn("skills/ponytail/SKILL.md", text)
+        for name in ("mycomp-operator", "fast-batch", "development-loop"):
+            self.assertIn(f"skills/{name}/SKILL.md", text)
         self.assertIn("never widen allowed filesystem roots", text)
-
 
 if __name__ == "__main__":
     unittest.main()

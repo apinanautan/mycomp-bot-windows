@@ -5,7 +5,7 @@ description: Use for code fixes, implementation, repository changes, or debuggin
 
 # Development Loop
 
-A repeatable engineering workflow, not a shell/UI tool. Combine with ponytail for the smallest correct change. Repository AGENTS.md, platform permissions, and explicit user constraints take precedence.
+A repeatable engineering workflow, not a shell/UI tool. Make the smallest correct change. Repository AGENTS.md, platform permissions, and explicit user constraints take precedence.
 
 ## Start
 1. Read repository instructions (AGENTS.md) and git status. Identify the target repo and existing state file. Never wipe, reset, stash, or overwrite unrelated work to simplify the task.

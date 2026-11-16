@@ -31,7 +31,7 @@ class TunnelFirstReadinessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             tunnel = Tunnel(Path(directory))
             prompt = tunnel.plugin_prompt("MyComp BotS", "https://example.ts.net/mycomp")
-            for phrase in ("blocked_permission", "operator-clarity", "ข้ามเฉพาะการผูก Tunnel",
+            for phrase in ("blocked_permission", "mycomp-operator", "ข้ามเฉพาะการผูก Tunnel",
                            "ผ่าน Tailscale", "MyComp BotS Tunnel", "MyComp BotS Tailscale"):
                 self.assertIn(phrase, prompt)
             self.assertNotIn("ไม่ข้ามไปทำงานอื่นก่อน Tunnel สำเร็จ", prompt)

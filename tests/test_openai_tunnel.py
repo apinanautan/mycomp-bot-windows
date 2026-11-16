@@ -123,9 +123,9 @@ class TunnelTests(unittest.TestCase):
             prompt = tunnel.plugin_prompt("User Named Bot", "https://desktop.example.ts.net/mycomp")
             self.assertIn("User Named Bot Tailscale", prompt)
             self.assertIn("User Named Bot Tunnel", prompt)
-            self.assertIn("skills/operator-clarity/SKILL.md", prompt)
-            for name in ("development-loop", "ponytail", "tool-routing",
-                         "connection-recovery"):
+            self.assertIn("skills/mycomp-operator/SKILL.md", prompt)
+            for name in ("development-loop", "fast-batch",
+                         "mycomp-operator"):
                 self.assertIn(name, prompt)
             self.assertIn("Remote Desktop Commander", prompt)
             self.assertIn("dom_cdp.launch", prompt)

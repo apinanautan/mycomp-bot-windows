@@ -1,3 +1,7 @@
+## Version 1.1.49 — Leaner, faster skill set
+
+Skills cut from 5 (~2,700 words) to 3 (~1,000 words). New **fast-batch** teaches ChatGPT to plan first and do more per tool call (batch_read, batch_execute, dom_cdp/accessibility steps), since each ChatGPT round trip is far slower than the PC. **mycomp-operator** merges operator-clarity, tool-routing and connection-recovery. ponytail is removed. The setup prompt now asks to delete retired skills from plugins.
+
 ## Version 1.1.48 — agent-desktop skill removed
 
 The `agent-desktop-portable` skill is removed from the bundle, AGENTS.md and the plugin setup prompt. The prompt now tells the assistant to delete an existing copy and not to install agent-desktop. GUI work uses Windows UI tools or Remote Desktop Commander.
@@ -206,9 +210,9 @@ This code fix does not change ChatGPT workspace Custom MCP entitlements.
 A private Plugin Creator package update is distinct from installing or
 enabling that plugin in ChatGPT's active workspace.
 
-## Operator clarity and channel verification
+## Operator and channel verification
 
-The operator-clarity skill is bundled with MyComp Bot. It requires exact machine
+The mycomp-operator skill is bundled with MyComp Bot. It requires exact machine
 identity, prevents modifications to unrelated Studio/Orchestrator plugins, and
 continues independent setup tasks even when the ChatGPT account/workspace
 denies custom MCP attachment. Existing Tunnel ID, DPAPI API key and main

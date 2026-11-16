@@ -10,4 +10,4 @@ MyComp Bot controls local files and processes. Keep all new behaviour deny-by-de
 The Python engine binds to loopback. Cloudflare and the two legacy LaunchAgents mentioned
 in the README are external configuration and are never managed by this repository.
 
-For MyComp Bot setup and repair, apply skills/operator-clarity/SKILL.md to pin target machine, plugin name and scope. For coding tasks, follow skills/development-loop/SKILL.md and skills/ponytail/SKILL.md. For channel selection or failures, use skills/tool-routing/SKILL.md and skills/connection-recovery/SKILL.md. Skills add no remote permissions and never override the security rules above.
+For MyComp Bot setup, repair, channel selection or failures, apply skills/mycomp-operator/SKILL.md to pin target machine, plugin name and scope. For any tool work, follow skills/fast-batch/SKILL.md. For coding tasks, follow skills/development-loop/SKILL.md. Skills add no remote permissions and never override the security rules above.
