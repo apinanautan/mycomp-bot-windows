@@ -228,15 +228,17 @@ class Tunnel:
 
 **ภารกิจ:** ติดตั้ง/อัปเดตสกิลของ {name} เท่านั้น ไม่ต้องตั้งค่า Tailscale, Tunnel, OAuth หรือ Remote Desktop และไม่ต้องสร้างหรือเปลี่ยนชื่อปลั๊กอิน ใช้การเชื่อมต่อที่ใช้งานอยู่ตอนนี้ได้เลย
 
-1. ติดตั้งให้ครบ 3 สกิลจาก skills/ ในโปรเจกต์ (ถ้ามีอยู่แล้วและเนื้อหาตรงกันให้ข้าม ถ้าเก่ากว่าให้อัปเดต):
+1. ติดตั้งให้ครบ 4 ชุดสกิลจาก skills/ ในโปรเจกต์ (ถ้ามีอยู่แล้วและเนื้อหาตรงกันให้ข้าม ถ้าเก่ากว่าให้อัปเดต):
    - fast-batch — วางแผนก่อน แล้วรวมหลายขั้นตอนในคำสั่งเดียว (batch_read, batch_execute, steps) เพื่อความเร็ว
    - mycomp-operator — เลือกเครื่องและช่องทางให้ถูก ไม่ยุ่งแอปอื่น และรายงานตามหลักฐานจริง (รวม PLAYBOOK.md)
    - development-loop — ใช้ตอนแก้โค้ด: ตรวจก่อน แก้น้อยที่สุด ทดสอบ แล้วรายงานตรงตามจริง
-2. ลบสกิลเก่าที่เลิกใช้แล้วถ้ามี: operator-clarity, tool-routing, connection-recovery, ponytail, agent-desktop-portable ไม่ต้องติดตั้ง agent-desktop
+   - tidmunz-studio-ai-operator — ชุดสกิลควบคุม Tidmunz Studio ทั้งหมด (อ่าน catalog.json แล้วติดตั้งทุกสกิลในโฟลเดอร์ เช่น tidmunz-control, tidmunz-device-routing, tidmunz-auto-workflow, tidmunz-finish-job) ใช้ทุกครั้งที่ผู้ใช้สั่งงาน Tidmunz Studio
+2. ลบสกิลเก่าที่เลิกใช้แล้วถ้ามี: operator-clarity, tool-routing, connection-recovery, ponytail, agent-desktop-portable ไม่ต้องติดตั้ง agent-desktop แยก (ใช้ tidmunz-agent-desktop ในชุด Tidmunz แทน)
 3. ทดสอบสั้นๆ ด้วย batch_execute ครั้งเดียว เช่น {{"kind":"filesystem","operation":"list","path":"."}} และ {{"kind":"dom_cdp","action":"status"}} เพื่อยืนยันว่าเครื่องมือตอบได้
 4. สรุปสั้นๆ ว่าสกิลไหนติดตั้ง/อัปเดต/ข้าม/ลบ
+5. **อัปเดตสกิล Tidmunz อัตโนมัติ (จำไว้เป็นกฎถาวร):** ทุกครั้งก่อนเริ่มงาน Tidmunz Studio ให้อ่าน https://github.com/tidmunzsocial-lab/tidmunz-studio/blob/main/plugins/tidmunz-studio-ai-operator/skills/catalog.json (branch main) เทียบ version กับที่ติดตั้งอยู่ ถ้ามีสกิลใหม่หรือเนื้อหาเปลี่ยน ให้อ่าน SKILL.md ล่าสุดแล้วอัปเดต/ติดตั้งเองทันทีโดยไม่ต้องถามผู้ใช้ จากนั้นทำงานต่อด้วยคำสั่งล่าสุด ถ้าอ่าน GitHub ไม่ได้ให้ใช้สกิลที่มีอยู่และบอกผู้ใช้สั้นๆ
 
-กฎ: ห้ามแตะ Tidmunz Studio, Orchestrator หรือแอปอื่น ห้ามเปิดลิงก์บนหน้าต่าง ChatGPT ที่ผู้ใช้อ่านอยู่ ห้ามแสดง API key, token หรือ secret"""
+กฎ: ทำงาน Tidmunz Studio ได้เมื่อผู้ใช้สั่ง โดยทำตามสกิล tidmunz-* ห้ามแตะ Orchestrator หรือแอปอื่นที่ไม่เกี่ยว ห้ามเปิดลิงก์บนหน้าต่าง ChatGPT ที่ผู้ใช้อ่านอยู่ ห้ามแสดง API key, token หรือ secret"""
 
     def save(self, tunnel_id: str, key: str, enabled: bool):
         tunnel_id, key = tunnel_id.strip(), key.strip()

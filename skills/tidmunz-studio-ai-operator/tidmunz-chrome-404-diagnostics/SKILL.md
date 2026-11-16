@@ -1,0 +1,40 @@
+---
+name: tidmunz-chrome-404-diagnostics
+description: Diagnose recurring ChatGPT conversation_not_found / 404 failures in Tidmunz Studio Prompt-Ref, and evaluate the optional local Codex CLI without spending Codex Go quota. Distinguish a ChatGPT page banner from authoritative server HTTP responses; don't assume deleted chats or obsolete bot routing.
+---
+
+# Tidmunz Studio: Chrome extension 404, actual cause, and safe Codex alternative
+
+Use alongside `tidmunz-device-routing`, `tidmunz-control`, `tidmunz-run-live`, and `tidmunz-auto-supervision`. Carry out read-only diagnosis first on the verified active PC. This documented finding was reproduced by reading installed app/extension source and unit tests (2026-11-07); its exact triggering provider response on any particular job may remain unknown without a network trace.
+
+## Verified routing in current installed architecture
+
+- Prompt-Ref uses `_prompt_ref_chat` -> `_chatgpt_api_base()` -> `snapgen_chrome_relay.api_root()` -> loopback `/v1/chat/completions` -> the application's `Tidmunz ChatGPT` Chrome extension -> chatgpt.com in **Tidmunz's own Chrome profile**. This does not use the former standalone `python -m chatgpt_api serve` bot/Bridge. Symbols named `_bridge_*` and static `local-dev-key` are compatibility leftovers, not evidence that the old bot is running.
+- Confirm *live*: call local authenticated relay `/status` (no auth token required by this read-only endpoint) and `/v1/health` using the port and locally held token in `snapgen_data/chrome_relay.json`. Do not disclose token, full URL, browser cookies, account email, or private conversation IDs. Check `connected`, `extension_version`, queue/busy, Chrome profile path, extension manifest, user account match, and actual running processes. Only count `-m chatgpt_api serve` as old standalone service; `hermes_bridge.py` is unrelated.
+- Example from a previous case: loopback relay port 8766, extension 1.0.46, account matched, `connected=true`, standalone old bot absent. Never hardcode those values as general facts, and don't infer that connected means historical conversations are retrievable.
+
+## Critical false-404 finding (source-confirmed, not an assertion that user deleted a chat)
+
+- `snapgen_modules/chrome_ext/background.js`, `pageSendInner`: the old extension evaluated the *visible page text* `Unable to load conversation` and returned `not_found: true`, `ChatGPT conversation failed: 404` before verifying a backend HTTP 404. It also turned `HTTP 429` + a loading-failure banner into 404. `snapgen_chrome_api.error_reply` then forwarded that as `chatgpt_conversation_not_found` (404). The user's statement that they never deleted the chat is completely compatible with this misclassification.
+- The same Auto workflow sends the full script as several GPT text turns in a single story history, separately asks two independent analysts, then asks a judge to continue that story chat. The error occurs at that *history reuse* point, not necessarily when submitting the original prompt. This creates more opportunities for a UI loading race, rate limiting, backend read error, stale worker tab, or unavailable conversation. Such possibilities are hypotheses until supported by response status and request evidence.
+- **Never conclude 'ChatGPT deleted/banned this conversation' from the UI banner or relay's synthesized 404 alone.** Record whether the **actual** `GET /backend-api/conversation/<id>` returned 200, 404, 429, 401/403, 5xx, or could not be read. Do not expose `<id>` to users or logs. Compare current and saved account identities without showing them. Check whether app stored `conversation_id`, `parent_message_id` and `story_hash`, whether source hash matches selected script and context is marked ready. A new-chat retry also failing is strong reason to investigate extension logic, not to reset again blindly.
+- The reviewed source patch (2026-11-07, **source-only until separately deployed**) removes UI-banner-only 404, checks backend status first, retries *read-only* verification of a fresh-chat 404 a bounded number of times, maps 429 to rate limiting even if the UI says 'unable to load', and avoids immediately retrying a provider HTTP error. Focused Node+pytest checks: 52 passed. This test proves the code's classification under mocked HTTP statuses, **not** that a particular remote ChatGPT conversation has been restored or that a release has been installed.
+
+## Evidence-driven response and bounded repair
+
+1. On receiving 'stuck' or 'finish', inspect native Auto status and `project.json`: exact story/audio, `busy`, stage, images/clips, `done`, final media, UUIDs/receipts, currently pending jobs. Preserve all assets and the selected story.
+2. Read the last console error, relay status, installed extension version, and installed app version **on the same PC**. Compare installed files with source changes; GitHub commits alone do not update running Tidmunz Studio.
+3. If the request **was not sent** and the backend confirmed 429, wait according to `Retry-After`, preserve chat cursor; do not label the conversation deleted or force a new one. If backend is 200 but the page cannot display the chat, inspect the real UI and perform at most one non-paid tab/navigation recovery; do not reset history. On login/challenge errors, require session correction rather than media resubmission.
+4. Only on *verified actual* repeated backend 404 of that exact conversation for the expected account and matching same-story hash may rebuilding a **not-yet-completed Prompt-Ref Context** be considered. Backup cursor/source first; confirm zero images/clips, no in-flight paid jobs, no duplicate HTTP receipt, and bounded recovery count. New Context chat must be verified readable before saving and using its cursor; after repeated failures stop resets and fix the underlying path.
+5. Prevent repeat paid generation. A provider timeout or lost response can mean a job was accepted. Check receipts/IDs and avoid submitting image/video again until reconciled. Record a specific diagnosis and retry limit in watcher state. Treat local watchers as deterministic monitoring; they do not autonomously invent code fixes when ChatGPT is offline.
+6. Verify actual end-to-end success only after Context is same-story, refs exist in the right folder, Auto passes planning, scenes and clips are saved, and final video is playable with correct audio. A passing test suite or percent bar does not prove this.
+
+## Local Codex CLI as an optional fallback, not the default
+
+- Distinguish **Codex installed on the PC** (`codex.exe`, `codex exec`, `codex login status`) from ChatGPT Web and the retired bot. Codex CLI may be logged in via ChatGPT without any old bot. It is already used by a separate Prompt Manager code path in Tidmunz. Its model in one inspected release was `gpt-5.4-mini`; **do not claim any 'Luna' model entitlement without testing supported models, and do not automatically consume limited Go quota.**
+- A local Codex CLI can analyze text and potentially generate a structured Context via an explicitly implemented adapter, but it is *not* a drop-in substitute for the Chrome extension's persisted GPT Web conversation, reference images or a video provider. Text-only Context fallback requires code-level integration, schema validation, story identity and consent to use Codex quota/provider.
+- For an owner preferring GPT Web, fix the real Chrome status classification/history handling first. Keep Codex as opt-in when the user explicitly wants to spend its smaller quota; merely running `codex --version` or `codex login status` is read-only and does not submit model work.
+
+## Portable skill learning
+
+Preserve machine independence: discover devices and per-machine loopback settings live; no fixed Device ID, hostname, email or token. When a finding is new and verified, update this skill following `tidmunz-skill-learning`, with precise test evidence and version, and continue the production task. Never promise continuous ChatGPT activity merely because a watcher or skill exists.

@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "plugin": "tidmunz-studio-ai-operator",
+  "source": "tidmunzsocial-lab/tidmunz-studio",
+  "version": "0.3.11",
+  "skills": [
+    {
+      "name": "tidmunz-agent-desktop",
+      "path": "skills/tidmunz-agent-desktop/SKILL.md"
+    },
+    {
+      "name": "tidmunz-auto-supervision",
+      "path": "skills/tidmunz-auto-supervision/SKILL.md"
+    },
+    {
+      "name": "tidmunz-auto-workflow",
+      "path": "skills/tidmunz-auto-workflow/SKILL.md"
+    },
+    {
+      "name": "tidmunz-chrome-404-diagnostics",
+      "path": "skills/tidmunz-chrome-404-diagnostics/SKILL.md"
+    },
+    {
+      "name": "tidmunz-control",
+      "path": "skills/tidmunz-control/SKILL.md"
+    },
+    {
+      "name": "tidmunz-device-routing",
+      "path": "skills/tidmunz-device-routing/SKILL.md"
+    },
+    {
+      "name": "tidmunz-director",
+      "path": "skills/tidmunz-director/SKILL.md"
+    },
+    {
+      "name": "tidmunz-finish-job",
+      "path": "skills/tidmunz-finish-job/SKILL.md"
+    },
+    {
+      "name": "tidmunz-provider-status",
+      "path": "skills/tidmunz-provider-status/SKILL.md"
+    },
+    {
+      "name": "tidmunz-remote-desktop",
+      "path": "skills/tidmunz-remote-desktop/SKILL.md"
+    },
+    {
+      "name": "tidmunz-run-live",
+      "path": "skills/tidmunz-run-live/SKILL.md"
+    },
+    {
+      "name": "tidmunz-skill-learning",
+      "path": "skills/tidmunz-skill-learning/SKILL.md"
+    },
+    {
+      "name": "tidmunz-skill-registry",
+      "path": "skills/tidmunz-skill-registry/SKILL.md"
+    }
+  ]
+}

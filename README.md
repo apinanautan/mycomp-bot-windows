@@ -1,3 +1,9 @@
+## Version 1.1.52 — Tidmunz Studio skills built in
+
+- Bundles the full tidmunz-studio-ai-operator skill set (13 skills) under skills/.
+- The setup prompt installs it and tells ChatGPT to check the Tidmunz GitHub catalog before every Tidmunz job and update changed skills automatically.
+- Tidmunz Studio work is now allowed when the user asks; Orchestrator stays off-limits.
+
 ## Version 1.1.51 — Skills-only setup prompt
 
 - The copy-prompt button now only installs the fast-batch, mycomp-operator and development-loop skills and runs one quick batch test.
