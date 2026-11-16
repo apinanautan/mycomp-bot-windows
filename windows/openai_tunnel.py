@@ -228,11 +228,12 @@ class Tunnel:
 
 **ภารกิจ:** ติดตั้ง/อัปเดตสกิลของ {name} เท่านั้น ไม่ต้องตั้งค่า Tailscale, Tunnel, OAuth หรือ Remote Desktop และไม่ต้องสร้างหรือเปลี่ยนชื่อปลั๊กอิน ใช้การเชื่อมต่อที่ใช้งานอยู่ตอนนี้ได้เลย
 
-1. ติดตั้งให้ครบ 4 ชุดสกิลจาก skills/ ในโปรเจกต์ (ถ้ามีอยู่แล้วและเนื้อหาตรงกันให้ข้าม ถ้าเก่ากว่าให้อัปเดต):
+1. ติดตั้งให้ครบ 5 ชุดสกิลจาก skills/ ในโปรเจกต์ (ถ้ามีอยู่แล้วและเนื้อหาตรงกันให้ข้าม ถ้าเก่ากว่าให้อัปเดต):
    - fast-batch — วางแผนก่อน แล้วรวมหลายขั้นตอนในคำสั่งเดียว (batch_read, batch_execute, steps) เพื่อความเร็ว
    - mycomp-operator — เลือกเครื่องและช่องทางให้ถูก ไม่ยุ่งแอปอื่น และรายงานตามหลักฐานจริง (รวม PLAYBOOK.md)
    - development-loop — ใช้ตอนแก้โค้ด: ตรวจก่อน แก้น้อยที่สุด ทดสอบ แล้วรายงานตรงตามจริง
    - tidmunz-studio-ai-operator — ชุดสกิลควบคุม Tidmunz Studio ทั้งหมด (อ่าน catalog.json แล้วติดตั้งทุกสกิลในโฟลเดอร์ เช่น tidmunz-control, tidmunz-device-routing, tidmunz-auto-workflow, tidmunz-finish-job) ใช้ทุกครั้งที่ผู้ใช้สั่งงาน Tidmunz Studio
+   - codex-luna — ส่งงานหลายขั้นตอน หรือแบ่งงานให้ Codex CLI (gpt-6-luna) ทำพร้อมกันได้สูงสุด 3 งาน เพื่อใช้โควต้า Codex ให้คุ้ม ตอนติดตั้ง/ทดสอบให้รัน codex login status ถ้ายังไม่ล็อกอินให้เปิดหน้าต่างล็อกอิน (Start-Process codex -ArgumentList 'login') แล้วรอผู้ใช้ล็อกอิน ถ้าล็อกอินแล้วไม่ต้องเปิด จากนั้นเช็กว่าอีเมลที่ Codex ล็อกอินตรงกับอีเมลของบัญชี ChatGPT นี้ (ถามผู้ใช้ครั้งเดียวแล้วจำไว้) ถ้าไม่ตรงห้ามใช้ Luna และให้ล็อกอินใหม่ด้วยบัญชีที่ถูก
 2. ลบสกิลเก่าที่เลิกใช้แล้วถ้ามี: operator-clarity, tool-routing, connection-recovery, ponytail, agent-desktop-portable ไม่ต้องติดตั้ง agent-desktop แยก (ใช้ tidmunz-agent-desktop ในชุด Tidmunz แทน)
 3. ทดสอบสั้นๆ ด้วย batch_execute ครั้งเดียว เช่น {{"kind":"filesystem","operation":"list","path":"."}} และ {{"kind":"dom_cdp","action":"status"}} เพื่อยืนยันว่าเครื่องมือตอบได้
 4. สรุปสั้นๆ ว่าสกิลไหนติดตั้ง/อัปเดต/ข้าม/ลบ

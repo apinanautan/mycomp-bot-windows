@@ -17,7 +17,7 @@ class BundledSkillTests(unittest.TestCase):
 
     def test_only_current_skills_are_bundled(self):
         names = sorted(item.name for item in (ROOT / "skills").iterdir() if item.is_dir())
-        self.assertEqual(names, ["development-loop", "fast-batch", "mycomp-operator", "tidmunz-studio-ai-operator"])
+        self.assertEqual(names, ["codex-luna", "development-loop", "fast-batch", "mycomp-operator", "tidmunz-studio-ai-operator"])
 
     def test_fast_batch_teaches_fewer_calls(self):
         text = (ROOT / "skills/fast-batch/SKILL.md").read_text(encoding="utf-8")
@@ -43,6 +43,13 @@ class BundledSkillTests(unittest.TestCase):
         self.assertGreaterEqual(len(catalog["skills"]), 10)
         for skill in catalog["skills"]:
             self.assertTrue((base / skill["path"].removeprefix("skills/")).is_file(), skill["name"])
+
+    def test_codex_luna_checks_login_and_stays_sandboxed(self):
+        text = (ROOT / "skills/codex-luna/SKILL.md").read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("---" + chr(10) + "name: codex-luna" + chr(10)))
+        for term in ("codex login status", "gpt-6-luna", "read-only", "at most 3", "Account match", "codex logout"):
+            self.assertIn(term, text)
+        self.assertIn("Never use `--dangerously-bypass-approvals-and-sandbox`", text)
 
     def test_repo_instructions_reference_current_skills(self):
         text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")

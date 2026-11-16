@@ -1,3 +1,9 @@
+## Version 1.1.53 — Codex CLI + Luna helper skill
+
+- New codex-luna skill: ChatGPT can hand multi-step work to the local Codex CLI (gpt-6-luna) and run up to 3 jobs in parallel (measured ~8 s per short job, ~10 s for three at once).
+- On install/test it runs codex login status and opens the Codex login window only if not signed in.
+- It checks that Codex is signed in with the same email as the ChatGPT account and refuses to use Luna when they differ.
+
 ## Version 1.1.52 — Tidmunz Studio skills built in
 
 - Bundles the full tidmunz-studio-ai-operator skill set (13 skills) under skills/.

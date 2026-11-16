@@ -89,7 +89,7 @@ class TunnelTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             prompt = Tunnel(Path(directory)).plugin_prompt("User Named Bot", "https://desktop.example.ts.net/mycomp")
             self.assertIn("User Named Bot", prompt)
-            for name in ("fast-batch", "mycomp-operator", "development-loop", "tidmunz-studio-ai-operator"):
+            for name in ("fast-batch", "mycomp-operator", "development-loop", "tidmunz-studio-ai-operator", "codex-luna", "codex login status"):
                 self.assertIn(name, prompt)
             for retired in ("operator-clarity", "tool-routing", "connection-recovery", "ponytail", "agent-desktop-portable"):
                 self.assertIn(retired, prompt)  # listed only for removal
