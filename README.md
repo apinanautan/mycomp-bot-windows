@@ -1,3 +1,7 @@
+## Version 1.1.46 — Tunnel restarts cleanly after updates
+
+Before starting, MyComp Bot now stops any orphaned copy of its own `tunnel-client.exe` (matched by exact path), so after an update ChatGPT can never reach a stale runtime that lacks the channel header. No manual restart or Task Manager step is needed.
+
 ## Version 1.1.45 — Channel-only connection without Tailscale
 
 The OpenAI Tunnel now authenticates to the loopback engine with a locally generated secret sent as a static tunnel-client header, so a ChatGPT connector over the Tunnel can use **No Auth** and connect directly, without Tailscale or an OAuth popup. The secret lives in `%LOCALAPPDATA%\MyComp Bot\openai-tunnel\channel-bearer`, grants the owner-selected permission level, and local processes without it are still rejected. Tailscale + OAuth keeps working unchanged.

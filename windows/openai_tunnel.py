@@ -337,6 +337,7 @@ STEP 5 — ตรวจรับและรายงานตรงตามจ
         key = protect(self.secret.read_bytes(), decrypt=True).decode()
         validate(config["tunnel_id"], key)
         self.health.unlink(missing_ok=True)
+        self._stop_stale_clients()
         environment = {**os.environ, "CONTROL_PLANE_API_KEY": key}
         # Channel-only auth: tunnel-client presents a local secret to the loopback
         # engine, so ChatGPT connects through the Tunnel without OAuth/Tailscale.
@@ -373,6 +374,21 @@ STEP 5 — ตรวจรับและรายงานตรงตามจ
             self.log.close()
             self.log = None
             raise
+
+    def _stop_stale_clients(self):
+        """Kill orphaned copies of OUR tunnel-client (e.g. left over from an update),
+        so ChatGPT never reaches an old runtime without the channel header."""
+        if os.name != "nt":
+            return
+        path = str(self.binary).replace("'", "''")
+        script = ("Get-CimInstance Win32_Process -Filter \"Name='tunnel-client.exe'\" | "
+                  f"Where-Object {{ $_.ExecutablePath -eq '{path}' }} | "
+                  "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }")
+        try:
+            subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                           capture_output=True, timeout=20, creationflags=subprocess.CREATE_NO_WINDOW)
+        except Exception:  # best-effort cleanup must never block starting the tunnel
+            pass
 
     def stop(self):
         if self.process is not None:
