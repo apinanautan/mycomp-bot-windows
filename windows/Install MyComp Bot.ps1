@@ -162,7 +162,7 @@ $hostProcess = Start-Process -FilePath $venvPython `
     -RedirectStandardError $hostErrorLog `
     -PassThru
 $healthy = $false
-for ($i = 0; $i -lt 20; $i++) {
+for ($i = 0; $i -lt 120; $i++) {
     Start-Sleep -Milliseconds 500
     $hostProcess.Refresh()
     if ($hostProcess.HasExited) { break }
@@ -173,8 +173,8 @@ for ($i = 0; $i -lt 20; $i++) {
 }
 if (-not $healthy) {
     $hostProcess.Refresh()
-    $hostError = if (Test-Path $hostErrorLog) { (Get-Content -LiteralPath $hostErrorLog -Raw).Trim() } else { '' }
-    $hostOutput = if (Test-Path $hostOutputLog) { (Get-Content -LiteralPath $hostOutputLog -Raw).Trim() } else { '' }
+    $hostError = if (Test-Path $hostErrorLog) { "$(Get-Content -LiteralPath $hostErrorLog -Raw)".Trim() } else { '' }
+    $hostOutput = if (Test-Path $hostOutputLog) { "$(Get-Content -LiteralPath $hostOutputLog -Raw)".Trim() } else { '' }
     if ($hostError) { throw "MyComp Bot failed to start:`r`n`r`n$hostError" }
     if ($hostOutput) { throw "MyComp Bot failed to start:`r`n`r`n$hostOutput" }
     throw "MyComp Bot did not become ready. Process exited: $($hostProcess.HasExited). Logs: $hostErrorLog and $hostOutputLog"

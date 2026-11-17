@@ -1,3 +1,8 @@
+## Version 1.1.59 — Installer fix for slow first start
+
+- Fixed the installer crash "You cannot call a method on a null-valued expression" (line 176) when the engine log was empty.
+- The installer now waits up to 60 s (was 10 s) for the engine on first start, which helps slow PCs and antivirus scans; if it still fails, the real reason is shown.
+
 ## Version 1.1.58 — Worker Chrome stays minimized
 
 - Opening a new tab in MyComp Bot's worker CDP Chrome used to restore its window over the screen. It is now re-minimized right after launch and after each new tab.
