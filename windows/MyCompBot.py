@@ -2046,3 +2046,6 @@ if __name__ == "__main__":
             # Detached tray threads must not keep the old process and its
             # single-instance mutex alive after an update handoff.
             os._exit(0)
+    else:
+        print("MyComp Bot is already running (another copy holds the single-instance lock). "
+              "Close it from the tray or Task Manager, then start again.", file=sys.stderr, flush=True)

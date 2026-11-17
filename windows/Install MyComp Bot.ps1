@@ -153,6 +153,15 @@ Set-EnvValue $configPath 'MYCOMP_PUBLIC_BASE_URL' $baseUrl
 Write-Host "Automatic MyComp public MCP URL: $endpoint" -ForegroundColor Green
 
 $app = Join-Path $PSScriptRoot 'MyCompBot.py'
+# Only one MyComp Bot may run. Close older MyComp Bot hosts (and only those)
+# so the new one does not exit silently on the single-instance lock.
+Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -match 'MyCompBot\.py' } |
+    ForEach-Object {
+        Write-Host "Closing running MyComp Bot (PID $($_.ProcessId)) before starting the new version..."
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+Start-Sleep -Seconds 2
 $hostOutputLog = Join-Path $configDir 'host-output.log'
 $hostErrorLog = Join-Path $configDir 'host-error.log'
 $hostProcess = Start-Process -FilePath $venvPython `

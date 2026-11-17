@@ -1,3 +1,8 @@
+## Version 1.1.60 — Installer closes an old running copy
+
+- If an older MyComp Bot was still running (often hidden in the tray), the new one exited silently on the single-instance lock and the installer reported "did not become ready" with empty logs. The installer now closes only running MyCompBot.py hosts before starting the new version.
+- When a second copy exits on the lock, it now writes the reason to host-error.log.
+
 ## Version 1.1.59 — Installer fix for slow first start
 
 - Fixed the installer crash "You cannot call a method on a null-valued expression" (line 176) when the engine log was empty.
