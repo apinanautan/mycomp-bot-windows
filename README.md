@@ -1,3 +1,7 @@
+## v1.1.66
+
+- OpenAI Tunnel window: added a Copy button for the Tunnel ID, moved the green/red check line so nothing covers it, and removed the unused named-profile section.
+
 ## Version 1.1.65 — Paste buttons and key check in OpenAI Tunnel
 
 - "📋 วาง" buttons next to Tunnel ID and API key paste from the clipboard and trim spaces.

@@ -812,7 +812,12 @@ class MyCompBot(tk.Tk):
                 variable.set(self.clipboard_get().strip())
             except tk.TclError:
                 messagebox.showwarning("OpenAI Tunnel", "Clipboard is empty. Copy the value first.", parent=window)
-        ttk.Button(window, text="📋 วาง", command=lambda: paste_into(tunnel_id)).grid(row=0, column=2, padx=(0, 12), pady=8)
+        ttk.Button(window, text="📋 วาง", command=lambda: paste_into(tunnel_id)).grid(row=0, column=2, padx=(0, 6), pady=8)
+        def copy_tunnel_id():
+            self.clipboard_clear()
+            self.clipboard_append(tunnel_id.get().strip())
+            status.set("คัดลอก Tunnel ID แล้ว")
+        ttk.Button(window, text="📄 คัดลอก", command=copy_tunnel_id).grid(row=0, column=3, padx=(0, 12), pady=8)
         ttk.Label(window, text="API key").grid(row=1, column=0, padx=12, pady=8, sticky="w")
         key_area = ttk.Frame(window)
         key_area.grid(row=1, column=1, padx=12, pady=8, sticky="ew")
@@ -838,7 +843,7 @@ class MyCompBot(tk.Tk):
         # Show only a masked fingerprint so the user can confirm the right value; never the full key.
         check = tk.StringVar()
         check_label = tk.Label(window, textvariable=check, font=("Segoe UI", 9), anchor="w", justify="left")
-        check_label.grid(row=7, column=0, columnspan=3, padx=12, pady=(0, 4), sticky="w")
+        check_label.grid(row=6, column=0, columnspan=4, padx=12, pady=(4, 12), sticky="w")
         def saved_key_tail():
             try:
                 from openai_tunnel import protect
@@ -904,73 +909,6 @@ class MyCompBot(tk.Tk):
             wraplength=650,
         ).grid(row=5, column=0, columnspan=2, padx=12, pady=8)
 
-        # Named profiles are stored on this Windows PC, separately from the
-        # already working legacy Tunnel ID and encrypted credential.
-        ttk.Label(window, text="Named Tunnel profile").grid(
-            row=6, column=0, padx=12, pady=(14, 8), sticky="w"
-        )
-        profile_box = ttk.Combobox(
-            window, textvariable=profile_name,
-            values=self.openai_tunnel.list_profiles(), width=44,
-        )
-        profile_box.grid(row=6, column=1, padx=12, pady=(14, 8), sticky="ew")
-
-        def load_profile_fields(event=None):
-            nonlocal key_saved
-            name = profile_name.get().strip()
-            if not name:
-                return
-            try:
-                info = self.openai_tunnel.profile_info(name)
-                tunnel_id.set(info["tunnel_id"])
-                key.set("")
-                key_saved = info["has_api_key"]
-                enabled.set(info["active"])
-                update_saved_key_indicator()
-                status.set(
-                    "Saved on this computer: " + name
-                    + (" | encrypted key saved" if key_saved else " | runtime key needed")
-                    + (" | ACTIVE" if info["active"] else " | other active Tunnel preserved")
-                )
-            except (OSError, KeyError, ValueError):
-                status.set("Profile not yet saved; enter the official Tunnel ID.")
-
-        profile_box.bind("<<ComboboxSelected>>", load_profile_fields)
-
-        def save_named_profile():
-            nonlocal key_saved
-            try:
-                info = self.openai_tunnel.save_profile(
-                    profile_name.get().strip(), tunnel_id.get(), key.get()
-                )
-                key.set("")
-                key_saved = info["has_api_key"]
-                profile_box.configure(values=self.openai_tunnel.list_profiles())
-                update_saved_key_indicator()
-                status.set(
-                    "Saved profile " + info["name"] + " on this PC. "
-                    + ("Runtime key encrypted. " if key_saved else "Runtime key required. ")
-                    + "Existing Tunnel not changed."
-                )
-            except (OSError, KeyError, ValueError) as error:
-                messagebox.showerror("Save named Tunnel", str(error), parent=window)
-
-        actions = ttk.Frame(window)
-        actions.grid(row=7, column=1, padx=12, pady=6, sticky="w")
-        ttk.Button(actions, text="Load selected", command=load_profile_fields).pack(side="left", padx=(0, 8))
-        ttk.Button(
-            actions, text="Save named ID/key (keep active Tunnel)",
-            command=save_named_profile,
-        ).pack(side="left")
-        ttk.Label(
-            window,
-            text="Select Dino to load its stored ID. Enter a new runtime API key in the field above. "
-                 "Save named profile to keep it without changing the existing connection. "
-                 "Check Connect automatically and choose Save and connect to activate only when ready.",
-            wraplength=630,
-        ).grid(row=8, column=0, columnspan=2, padx=12, pady=8)
-        if self.openai_tunnel.active_profile_name:
-            load_profile_fields()
 
     def _openai_tunnel_tick(self):
         if not self._closing:
