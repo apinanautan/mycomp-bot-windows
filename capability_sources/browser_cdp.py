@@ -315,6 +315,23 @@ def _selector_script(selector: str, body: str) -> str:
     return f"""(() => {{ const el = document.querySelector({json.dumps(selector)}); if (!el) return {{ok:false,error:'not found'}}; {body} }})()"""
 
 
+def _keep_minimized(port: int) -> None:
+    """Re-minimize ONLY MyComp Bot's own worker Chrome (never the user's or another app's)."""
+    if _workspace_session().get("port") != port:
+        return
+    try:
+        client = CDPWebSocket(_json_request(port, "/json/version")["webSocketDebuggerUrl"])
+        try:
+            for tab in _tabs(port):
+                window = client.call("Browser.getWindowForTarget", {"targetId": tab["id"]}).get("windowId")
+                if window is not None:
+                    client.call("Browser.setWindowBounds", {"windowId": window, "bounds": {"windowState": "minimized"}})
+        finally:
+            client.close()
+    except Exception:
+        pass  # Cosmetic only; never fail the real action.
+
+
 def execute(payload):
     if not isinstance(payload, dict):
         raise ValueError("payload must be an object")
@@ -378,6 +395,8 @@ def execute(payload):
                 _CDP_PORT_STATE.parent.mkdir(parents=True, exist_ok=True)
                 _CDP_PORT_STATE.write_text(str(port), encoding="ascii")
                 _WORKSPACE_SESSION.write_text(json.dumps({"port": port, "mode": "visible-half-screen", "profile": str(profile)}), encoding="utf-8")
+                if payload.get("background", True):
+                    _keep_minimized(port)
                 return {"launched": True, "port": port, "profile": str(profile), "browser": version.get("Browser"),
                         "websocket": version.get("webSocketDebuggerUrl"), "display": display,
                         "workspace": "visible-half-screen", "window_arguments": _window_arguments(display)}
@@ -409,7 +428,10 @@ def execute(payload):
                               lambda client, _: client.call("Page.navigate", {"url": url}))
                 return {"id": tab["id"], "type": "page", "url": url, "reused": True}
         quoted = urllib.parse.quote(url, safe=":/?&=#")
-        return _json_request(port, "/json/new?" + quoted, method="PUT")
+        created = _json_request(port, "/json/new?" + quoted, method="PUT")
+        if payload.get("background", True):
+            _keep_minimized(port)
+        return created
 
     if action == "close_tab":
         tab = _tab(port, payload)

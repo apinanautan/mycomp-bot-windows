@@ -1,3 +1,8 @@
+## Version 1.1.58 — Worker Chrome stays minimized
+
+- Opening a new tab in MyComp Bot's worker CDP Chrome used to restore its window over the screen. It is now re-minimized right after launch and after each new tab.
+- Applies only to MyComp Bot's own worker Chrome (matched by its saved session port); the user's Chrome and other apps' Chrome are never touched.
+
 ## Version 1.1.57 — Skill self-update reminder in mycomp-operator
 
 - mycomp-operator now tells ChatGPT to check the "Skill set version" at the start of every chat and update missing or older skills itself, as a second layer behind the MCP connection instructions.
