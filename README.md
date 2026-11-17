@@ -1,3 +1,7 @@
+## Version 1.1.64 — Show rejected Tunnel API key
+
+- When OpenAI rejects the saved Platform API key (401 invalid_api_key in runtime.log), the Tunnel status now shows red "API key invalid - paste a new key" instead of amber "Ready; not verified".
+
 ## Version 1.1.63 — Engine self-heals
 
 - The engine now writes its output to %LOCALAPPDATA%\MyComp Bot\engine.log (it was discarded), so "Engine stopped unexpectedly" has a visible cause.

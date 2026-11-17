@@ -39,6 +39,16 @@ class TunnelFirstReadinessTests(unittest.TestCase):
             with patch('windows.openai_tunnel.urllib.request.urlopen', return_value=Response()):
                 self.assertIn('disabled', tunnel.status())
 
+    def test_rejected_api_key_is_reported_not_ready(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tunnel = Tunnel(Path(directory))
+            tunnel.process = object()
+            tunnel.directory.mkdir(parents=True, exist_ok=True)
+            (tunnel.directory / 'runtime.log').write_text(
+                'WARN poll failed; backing off component=controlplane error="controlplane client: unexpected status 401: invalid_api_key: Incorrect API key"\n',
+                encoding='utf-8')
+            self.assertTrue(tunnel.status().startswith('API key rejected'))
+
 
 if __name__ == '__main__':
     unittest.main()

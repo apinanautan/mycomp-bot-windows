@@ -383,6 +383,13 @@ class Tunnel:
         if self.process is None:
             return self.error or "Not connected"
         try:
+            tail = (self.directory / "runtime.log").read_text(encoding="utf-8", errors="replace")[-4000:]
+        except OSError:
+            tail = ""
+        last_poll = tail.rfind("poll failed")
+        if last_poll != -1 and "invalid_api_key" in tail[last_poll:last_poll + 400] and "forwarded command" not in tail[last_poll:]:
+            return "API key rejected by OpenAI (401 invalid_api_key): paste a new Platform API key for this Tunnel's organization"
+        try:
             base = self.health.read_text(encoding="utf-8").strip()
             if not re.fullmatch(r"http://127\.0\.0\.1:[0-9]+", base):
                 return "Starting; waiting for private health URL"
