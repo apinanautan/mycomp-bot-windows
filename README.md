@@ -1,3 +1,8 @@
+## Version 1.1.65 — Paste buttons and key check in OpenAI Tunnel
+
+- "📋 วาง" buttons next to Tunnel ID and API key paste from the clipboard and trim spaces.
+- A live check line shows a masked preview (first characters, last 4, length) in green when the format is right and red with the reason when not; the saved key shows only its last 4 characters.
+
 ## Version 1.1.64 — Show rejected Tunnel API key
 
 - When OpenAI rejects the saved Platform API key (401 invalid_api_key in runtime.log), the Tunnel status now shows red "API key invalid - paste a new key" instead of amber "Ready; not verified".

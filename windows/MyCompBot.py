@@ -18,6 +18,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 import queue
+import re
 import secrets
 import shutil
 import socket
@@ -806,6 +807,12 @@ class MyCompBot(tk.Tk):
         status = tk.StringVar(value=self.openai_tunnel.status())
         ttk.Label(window, text="Tunnel ID").grid(row=0, column=0, padx=12, pady=8, sticky="w")
         ttk.Entry(window, textvariable=tunnel_id, width=60).grid(row=0, column=1, padx=12, pady=8, sticky="ew")
+        def paste_into(variable):
+            try:
+                variable.set(self.clipboard_get().strip())
+            except tk.TclError:
+                messagebox.showwarning("OpenAI Tunnel", "Clipboard is empty. Copy the value first.", parent=window)
+        ttk.Button(window, text="📋 วาง", command=lambda: paste_into(tunnel_id)).grid(row=0, column=2, padx=(0, 12), pady=8)
         ttk.Label(window, text="API key").grid(row=1, column=0, padx=12, pady=8, sticky="w")
         key_area = ttk.Frame(window)
         key_area.grid(row=1, column=1, padx=12, pady=8, sticky="ew")
@@ -827,6 +834,36 @@ class MyCompBot(tk.Tk):
         key.trace_add("write", update_saved_key_indicator)
         saved_key_label.bind("<Button-1>", lambda event: key_entry.focus_set())
         update_saved_key_indicator()
+        ttk.Button(window, text="📋 วาง", command=lambda: paste_into(key)).grid(row=1, column=2, padx=(0, 12), pady=8)
+        # Show only a masked fingerprint so the user can confirm the right value; never the full key.
+        check = tk.StringVar()
+        check_label = tk.Label(window, textvariable=check, font=("Segoe UI", 9), anchor="w", justify="left")
+        check_label.grid(row=7, column=0, columnspan=3, padx=12, pady=(0, 4), sticky="w")
+        def saved_key_tail():
+            try:
+                from openai_tunnel import protect
+                value = protect(self.openai_tunnel.secret.read_bytes(), decrypt=True).decode()
+                return value[-4:]
+            except Exception:
+                return ""
+        def update_check(*_):
+            tid = tunnel_id.get().strip()
+            tid_ok = bool(re.fullmatch(r"tunnel_[a-f0-9]{32}", tid))
+            lines = [("✓ " if tid_ok else "✗ ") + "Tunnel ID: " + (tid[:13] + "…" + tid[-4:] if tid else "(ว่าง)")
+                     + ("" if tid_ok else "  — ต้องขึ้นต้นด้วย tunnel_ และยาว 39 ตัว")]
+            value = key.get().strip()
+            if value:
+                key_ok = bool(re.fullmatch(r"sk-[A-Za-z0-9_-]{20,}", value))
+                lines.append(("✓ " if key_ok else "✗ ") + f"API key ใหม่: {value[:8]}…{value[-4:]}  ({len(value)} ตัวอักษร)"
+                             + ("" if key_ok else "  — ต้องขึ้นต้นด้วย sk- และไม่มีช่องว่าง"))
+            else:
+                tail = saved_key_tail() if key_saved else ""
+                lines.append(f"API key ที่บันทึกไว้: …{tail}" if tail else "API key: ยังไม่ได้ใส่")
+            check.set(chr(10).join(lines))
+            check_label.config(fg="#147d36" if all(line.startswith("✓") or line.startswith("API key ที่บันทึก") for line in lines) else "#b42318")
+        tunnel_id.trace_add("write", update_check)
+        key.trace_add("write", update_check)
+        update_check()
         ttk.Checkbutton(window, text="Connect automatically while MyComp is running", variable=enabled).grid(row=2, column=0, columnspan=2, padx=12, pady=8)
         profile_name = tk.StringVar(value=self.openai_tunnel.active_profile_name or "")
 
@@ -848,6 +885,7 @@ class MyCompBot(tk.Tk):
                     key_saved = self.openai_tunnel.secret.is_file()
                 key.set("")
                 update_saved_key_indicator()
+                update_check()
                 self.openai_tunnel.tick()
                 status.set(self.openai_tunnel.status())
             except (OSError, ValueError, KeyError) as error:
