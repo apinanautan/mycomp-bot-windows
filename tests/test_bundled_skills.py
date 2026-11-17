@@ -54,7 +54,7 @@ class BundledSkillTests(unittest.TestCase):
     def test_chat_handoff_saves_and_resumes(self):
         text = (ROOT / "skills/chat-handoff/SKILL.md").read_text(encoding="utf-8")
         self.assertTrue(text.startswith("---" + chr(10) + "name: chat-handoff" + chr(10)))
-        for term in ("HANDOFF.md", "Documents", "Status: open", "Next step", "ต่องาน", "Never write tokens"):
+        for term in ("HANDOFF.md", "Documents", "Status: open", "Next step", "ต่องาน", "Never write tokens", "ready-to-copy summary", "ต่องาน —"):
             self.assertIn(term, text)
 
     def test_repo_instructions_reference_current_skills(self):

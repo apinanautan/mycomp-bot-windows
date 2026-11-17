@@ -235,7 +235,7 @@ class Tunnel:
    - mycomp-operator — เลือกเครื่องและช่องทางให้ถูก ไม่ยุ่งแอปอื่น และรายงานตามหลักฐานจริง (รวม PLAYBOOK.md)
    - development-loop — ใช้ตอนแก้โค้ด: ตรวจก่อน แก้น้อยที่สุด ทดสอบ แล้วรายงานตรงตามจริง
    - tidmunz-studio-ai-operator — ชุดสกิลควบคุม Tidmunz Studio ทั้งหมด (อ่าน catalog.json แล้วติดตั้งทุกสกิลในโฟลเดอร์ เช่น tidmunz-control, tidmunz-device-routing, tidmunz-auto-workflow, tidmunz-finish-job) ใช้ทุกครั้งที่ผู้ใช้สั่งงาน Tidmunz Studio
-   - chat-handoff — บันทึกงานลง Documents\\MyComp Bot Handoff\\HANDOFF.md ระหว่างทำ ถ้าแชตใกล้เต็มให้สรุปแล้วบอกผู้ใช้เปิดแชตใหม่พิมพ์ "ต่องาน" และทุกแชตใหม่ให้อ่านไฟล์นี้ก่อนเพื่อทำต่อ
+   - chat-handoff — บันทึกงานลง Documents\\MyComp Bot Handoff\\HANDOFF.md ระหว่างทำ ถ้าแชตใกล้เต็มให้แจ้งผู้ใช้ พร้อมสรุปงานในกล่องโค้ดให้คัดลอกไปวางในแชตใหม่ (หรือพิมพ์ "ต่องาน") และทุกแชตใหม่ให้อ่านไฟล์นี้ก่อนเพื่อทำต่อ
    - codex-luna — ส่งงานหลายขั้นตอน หรือแบ่งงานให้ Codex CLI (gpt-6-luna) ทำพร้อมกันได้สูงสุด 3 งาน เพื่อใช้โควต้า Codex ให้คุ้ม ตอนติดตั้ง/ทดสอบให้รัน codex login status ถ้ายังไม่ล็อกอินให้เปิดหน้าต่างล็อกอิน (Start-Process codex -ArgumentList 'login') แล้วรอผู้ใช้ล็อกอิน ถ้าล็อกอินแล้วไม่ต้องเปิด จากนั้นเช็กว่าอีเมลที่ Codex ล็อกอินตรงกับอีเมลของบัญชี ChatGPT นี้ (ถามผู้ใช้ครั้งเดียวแล้วจำไว้) ถ้าไม่ตรงห้ามใช้ Luna และให้ล็อกอินใหม่ด้วยบัญชีที่ถูก
 2. ลบสกิลเก่าที่เลิกใช้แล้วถ้ามี: operator-clarity, tool-routing, connection-recovery, ponytail, agent-desktop-portable ไม่ต้องติดตั้ง agent-desktop แยก (ใช้ tidmunz-agent-desktop ในชุด Tidmunz แทน)
 3. สรุปสั้นๆ ว่าสกิลไหนติดตั้ง/อัปเดต/ข้าม/ลบ

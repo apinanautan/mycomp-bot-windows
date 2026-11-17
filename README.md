@@ -1,3 +1,7 @@
+## Version 1.1.62 — Copy-paste handoff summary
+
+- When a chat is nearly full, chat-handoff now warns the user and gives a ready-to-copy summary in one code block (goal, done, current state, next steps, rules) to paste into a new chat. HANDOFF.md stays as a backup.
+
 ## Version 1.1.61 — chat-handoff skill
 
 - New chat-handoff skill: ChatGPT keeps a running work log in Documents\MyComp Bot Handoff\HANDOFF.md, hands off before a chat fills up (about 40+ tool calls, long outputs, slowdowns), and tells the user to open a new chat and type "ต่องาน".
