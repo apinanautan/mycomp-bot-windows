@@ -17,7 +17,7 @@ class BundledSkillTests(unittest.TestCase):
 
     def test_only_current_skills_are_bundled(self):
         names = sorted(item.name for item in (ROOT / "skills").iterdir() if item.is_dir())
-        self.assertEqual(names, ["codex-luna", "development-loop", "fast-batch", "mycomp-operator", "tidmunz-studio-ai-operator"])
+        self.assertEqual(names, ["chat-handoff", "codex-luna", "development-loop", "fast-batch", "mycomp-operator", "tidmunz-studio-ai-operator"])
 
     def test_fast_batch_teaches_fewer_calls(self):
         text = (ROOT / "skills/fast-batch/SKILL.md").read_text(encoding="utf-8")
@@ -50,6 +50,12 @@ class BundledSkillTests(unittest.TestCase):
         for term in ("codex login status", "gpt-6-luna", "read-only", "at most 3", "Account match", "codex logout"):
             self.assertIn(term, text)
         self.assertIn("Never use `--dangerously-bypass-approvals-and-sandbox`", text)
+
+    def test_chat_handoff_saves_and_resumes(self):
+        text = (ROOT / "skills/chat-handoff/SKILL.md").read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("---" + chr(10) + "name: chat-handoff" + chr(10)))
+        for term in ("HANDOFF.md", "Documents", "Status: open", "Next step", "ต่องาน", "Never write tokens"):
+            self.assertIn(term, text)
 
     def test_repo_instructions_reference_current_skills(self):
         text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")

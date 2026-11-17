@@ -7,6 +7,7 @@ description: Target the right MyComp Bot computer and channel, choose the tool t
 
 ## Start of every chat: keep skills current
 Before the first task, read MyComp Bot's connection instructions ("Skill set version: X"). If any MyComp Bot skill you have is missing or older than X, install or update only those from https://github.com/apinanautan/mycomp-bot-windows/tree/vX/skills without asking, then continue. Skip this when everything is already current.
+Then follow chat-handoff: read Documents\MyComp Bot Handoff\HANDOFF.md and continue open work; keep it updated during long tasks and hand off before the chat fills up.
 
 ## Target and scope
 1. Bind the exact computer and connector before acting. Success on machine A is NOT success on machine B.

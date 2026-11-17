@@ -1,3 +1,9 @@
+## Version 1.1.61 — chat-handoff skill
+
+- New chat-handoff skill: ChatGPT keeps a running work log in Documents\MyComp Bot Handoff\HANDOFF.md, hands off before a chat fills up (about 40+ tool calls, long outputs, slowdowns), and tells the user to open a new chat and type "ต่องาน".
+- Every new chat reads the handoff first and continues open work; finished work is marked done and archived in history\.
+- Ships automatically to connected ChatGPTs through the skill self-update.
+
 ## Version 1.1.60 — Installer closes an old running copy
 
 - If an older MyComp Bot was still running (often hidden in the tray), the new one exited silently on the single-instance lock and the installer reported "did not become ready" with empty logs. The installer now closes only running MyCompBot.py hosts before starting the new version.
