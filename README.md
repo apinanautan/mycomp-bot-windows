@@ -1,3 +1,9 @@
+## Version 1.1.63 — Engine self-heals
+
+- The engine now writes its output to %LOCALAPPDATA%\MyComp Bot\engine.log (it was discarded), so "Engine stopped unexpectedly" has a visible cause.
+- A crashed engine is restarted automatically (up to 5 times per 10 minutes); if it keeps stopping, the status shows the last error line.
+- Before starting, leftover MyComp Bot engines (mycomp_bot_engine.server) that could hold port 8645 are closed; the installer closes them too. Nothing else is touched.
+
 ## Version 1.1.62 — Copy-paste handoff summary
 
 - When a chat is nearly full, chat-handoff now warns the user and gives a ready-to-copy summary in one code block (goal, done, current state, next steps, rules) to paste into a new chat. HANDOFF.md stays as a backup.

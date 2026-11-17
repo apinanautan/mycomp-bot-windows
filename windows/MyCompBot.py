@@ -54,6 +54,29 @@ ROOT = Path(__file__).resolve().parent.parent
 APP_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 APP_DATA = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / "MyComp Bot"
 CONFIG = APP_DATA / ".env"
+ENGINE_LOG = APP_DATA / "engine.log"
+
+
+def _last_engine_error() -> str:
+    try:
+        lines = [line.strip() for line in ENGINE_LOG.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
+        return (lines[-1] if lines else "no output")[:160] + f" (see {ENGINE_LOG})"
+    except OSError:
+        return f"see {ENGINE_LOG}"
+
+
+def _stop_orphan_engines(skip_pid: int | None) -> None:
+    """Kill only leftover MyComp Bot engines (mycomp_bot_engine.server) that hold port 8645."""
+    if os.name != "nt":
+        return
+    try:
+        script = ("Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='pythonw.exe'\" | "
+                  "Where-Object { $_.CommandLine -match 'mycomp_bot_engine\\.server' } | "
+                  "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }")
+        subprocess.run(["powershell.exe", "-NoProfile", "-Command", script], capture_output=True, timeout=20,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception:
+        pass
 RUNTIME = APP_DATA / "runtime"
 COMMANDS, RESULTS = RUNTIME / "ui-commands", RUNTIME / "ui-results"
 SHOW_WINDOW_REQUEST = RUNTIME / "show-window.request"
@@ -1384,7 +1407,12 @@ class MyCompBot(tk.Tk):
         if not executable.exists():
             messagebox.showerror("Setup required", "Run windows\\Run MyComp Bot.ps1 first.")
             return
-        self.process = subprocess.Popen([str(executable), "-B", "-m", "mycomp_bot_engine.server"], cwd=ROOT, env=self._engine_env(), text=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW))
+        _stop_orphan_engines(skip_pid=None)
+        APP_DATA.mkdir(parents=True, exist_ok=True)
+        log = open(ENGINE_LOG, "a", encoding="utf-8", errors="replace")
+        log.write("\n--- engine start " + time.strftime("%Y-%m-%d %H:%M:%S") + " ---\n"); log.flush()
+        self.process = subprocess.Popen([str(executable), "-B", "-m", "mycomp_bot_engine.server"], cwd=ROOT, env=self._engine_env(), text=True, stdout=log, stderr=log, creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW))
+        log.close()
         self.status.set("Starting…")
 
     def _stop(self) -> None:
@@ -1688,7 +1716,16 @@ class MyCompBot(tk.Tk):
         except queue.Empty:
             pass
         if self.process and self.process.poll() is not None:
-            self.status.set("Engine stopped unexpectedly")
+            # Self-heal: restart a crashed engine (max 5 restarts per 10 minutes).
+            now = time.monotonic()
+            self.engine_restarts = [t for t in getattr(self, "engine_restarts", []) if now - t < 600]
+            if len(self.engine_restarts) < 5:
+                self.engine_restarts.append(now)
+                self.process = None
+                self._start()
+                self.status.set(f"Engine restarted automatically ({len(self.engine_restarts)}/5)")
+            else:
+                self.status.set("Engine keeps stopping: " + _last_engine_error())
         elif healthy:
             self.status.set("Running on 127.0.0.1:8645")
         if self.remote_commander_process is not None:

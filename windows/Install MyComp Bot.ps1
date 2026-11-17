@@ -156,7 +156,7 @@ $app = Join-Path $PSScriptRoot 'MyCompBot.py'
 # Only one MyComp Bot may run. Close older MyComp Bot hosts (and only those)
 # so the new one does not exit silently on the single-instance lock.
 Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -match 'MyCompBot\.py' } |
+    Where-Object { $_.CommandLine -match 'MyCompBot\.py|mycomp_bot_engine\.server' } |
     ForEach-Object {
         Write-Host "Closing running MyComp Bot (PID $($_.ProcessId)) before starting the new version..."
         Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
