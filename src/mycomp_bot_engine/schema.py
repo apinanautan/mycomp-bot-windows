@@ -14,4 +14,5 @@ TOOL_NAMES = (
     "batch_execute",
     "diagnostics",
     "windows_automation",
+    "blender_mcp",
 )

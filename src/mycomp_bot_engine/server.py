@@ -29,6 +29,7 @@ from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl, Field
 
+from .blender_mcp import READ_TOOLS, run_blender_mcp
 from .capabilities import CapabilityRegistry, close_workers, worker_snapshot
 from .config import CLIENT_ID, Settings
 from .database import Database
@@ -547,6 +548,31 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
             )
         except Exception as error:
             return failed(error, request_id=request_id, started=started, backend="batch_execute")
+    @mcp.tool(description="Use local Blender MCP in Blender GUI on 127.0.0.1:9876. operation=status, list_tools, or call_tool. A known Blender tool may receive JSON arguments. Modifying Blender requires full permission and allow_write=true; does not launch Blender.")
+    @threaded
+    def blender_mcp(
+        operation: Literal["status", "list_tools", "call_tool"] = "status",
+        tool: str | None = None, arguments: dict[str, Any] | None = None,
+        allow_write: bool = False, request_id: str | None = None,
+    ) -> dict[str, Any]:
+        started = time.monotonic()
+        try:
+            policy.require("normal", "blender_mcp")
+            if operation == "call_tool":
+                if not tool:
+                    raise ValueError("Blender tool name is required")
+                if tool not in READ_TOOLS:
+                    policy.require("full", "blender_mcp call_tool")
+                    if not allow_write:
+                        raise PermissionError("Blender modification requires allow_write=true")
+            data = run_blender_mcp(operation, tool, arguments)
+            changed = operation == "call_tool" and tool not in READ_TOOLS
+            return envelope(request_id=request_id, results=[data],
+                            status="failed" if data.get("isError") else "completed",
+                            changed=changed, started=started)
+        except Exception as error:
+            return failed(error, request_id=request_id, started=started, backend="blender_mcp")
+
     @mcp.tool(description="Read-only MyComp Engine diagnostics. Returns tool readiness and configured limits, not secrets, tokens, file contents or credentials.")
     @threaded
     def diagnostics(request_id: str | None = None) -> dict[str, Any]:
