@@ -69,7 +69,7 @@ class WindowsMcpExtensionTests(unittest.TestCase):
     def test_diagnostics_excludes_secrets(self):
         result = self.call("diagnostics")
         item = result["results"][0]
-        self.assertEqual(item["tool_count"], 14)
+        self.assertEqual(item["tool_count"], 15)
         self.assertEqual(item["permission_level"], "elevated")
         self.assertNotIn("token", str(item).lower())
         self.assertNotIn("api_key", str(item).lower())

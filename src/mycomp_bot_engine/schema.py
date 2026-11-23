@@ -15,4 +15,5 @@ TOOL_NAMES = (
     "diagnostics",
     "windows_automation",
     "blender_mcp",
+    "ai_iclone",
 )

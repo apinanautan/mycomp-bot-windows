@@ -29,6 +29,7 @@ from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl, Field
 
+from .ai_iclone import READ_COMMANDS as AI_ICLONE_READ, build_args as ai_iclone_args, run_ai_iclone
 from .blender_mcp import READ_TOOLS, run_blender_mcp
 from .capabilities import CapabilityRegistry, close_workers, worker_snapshot
 from .config import CLIENT_ID, Settings
@@ -572,6 +573,31 @@ def build_server(settings: Settings | None = None, resources: EngineResources | 
                             changed=changed, started=started)
         except Exception as error:
             return failed(error, request_id=request_id, started=started, backend="blender_mcp")
+
+    @mcp.tool(description="Run Ai-iclone.exe, the iClone 8 story-video pipeline (one fixed command per call, no shell). Start with command=manual, then command=do repeatedly: exit 0 OK=do again, 3 AI WORK=follow the card then do, 2 STOP=tell the user in Thai and wait, 1 FAIL=fix and retry once. approve needs user_said = the user's exact words; range needs time_range like 7:14-9:00. Read commands need normal permission, the rest elevated.")
+    @threaded
+    def ai_iclone(
+        command: Literal["manual", "status", "steps", "rules", "version", "do", "use", "new-story",
+                         "range", "approve", "clean", "update"] = "manual",
+        story: str | None = None, part: str | None = None, step: str | None = None,
+        time_range: str | None = None, user_said: str | None = None,
+        dry: bool = False, retry: bool = False, timeout_seconds: float = 900,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        started = time.monotonic()
+        try:
+            policy.require("normal", "ai_iclone")
+            if command not in AI_ICLONE_READ and not (command == "do" and dry):
+                policy.require("elevated", "ai_iclone " + command)
+            args = ai_iclone_args(command, story=story, part=part, step=step, time_range=time_range,
+                                  user_said=user_said, dry=dry, retry=retry)
+            data = run_ai_iclone(args, timeout=timeout_seconds)
+            changed = command not in AI_ICLONE_READ and not (command == "do" and dry)
+            return envelope(request_id=request_id, results=[data],
+                            status="failed" if data.get("isError") else "completed",
+                            changed=changed, started=started)
+        except Exception as error:
+            return failed(error, request_id=request_id, started=started, backend="ai_iclone")
 
     @mcp.tool(description="Read-only MyComp Engine diagnostics. Returns tool readiness and configured limits, not secrets, tokens, file contents or credentials.")
     @threaded
